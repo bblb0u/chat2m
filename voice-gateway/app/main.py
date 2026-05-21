@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:0.6b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:1.7b")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
@@ -94,7 +94,7 @@ async def call_ollama(message: str) -> str:
             "num_ctx": 1024,
             "temperature": 0.2,
             "top_p": 0.9,
-            "num_predict": 64,
+            "num_predict": 128,
             "num_thread": 8,
         },
     }
