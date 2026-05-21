@@ -39,6 +39,10 @@ class HealthResponse(BaseModel):
 app = FastAPI(title="Chat2M Voice Gateway", version="0.1.0")
 
 
+MATCH_REMOVE_PATTERN = re.compile(r"[\s，。！？、,.!?;；:：\"'“”‘’（）()【】\[\]{}<>《》]")
+MATCH_PREFIX_PATTERN = re.compile(r"^(请问|那个|嗯|啊|你好|您好|小江|嗨小江|嘿小江)+")
+
+
 def load_yaml(path: Path, default: dict[str, Any]) -> dict[str, Any]:
     if not path.exists():
         return default
@@ -66,11 +70,22 @@ def blocked_response() -> str:
     return str(safety().get("blocked_response", "这个问题暂时不能回答。"))
 
 
+def normalize_for_match(text: str) -> str:
+    normalized = text.strip().lower().replace("您", "你")
+    normalized = MATCH_REMOVE_PATTERN.sub("", normalized)
+    normalized = MATCH_PREFIX_PATTERN.sub("", normalized)
+    return normalized
+
+
 def match_fixed_qa(message: str) -> str | None:
-    normalized = message.strip().lower()
+    normalized = normalize_for_match(message)
     for item in profile().get("fixed_qa", []):
         patterns = item.get("patterns", [])
-        if any(str(pattern).lower() in normalized for pattern in patterns):
+        normalized_patterns = [normalize_for_match(str(pattern)) for pattern in patterns]
+        if any(
+            pattern and (pattern in normalized or (len(normalized) >= 2 and normalized in pattern))
+            for pattern in normalized_patterns
+        ):
             return str(item.get("answer", "")).strip() or None
     return None
 

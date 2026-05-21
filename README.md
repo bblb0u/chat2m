@@ -54,6 +54,12 @@ docker compose up -d voice-gateway
 如需换更大的模型：
 
 ```bash
+./scripts/start-local.sh --model qwen3:30b-instruct
+```
+
+也可以继续使用环境变量：
+
+```bash
 OLLAMA_MODEL=qwen3:30b-instruct ./scripts/start-local.sh
 ```
 
@@ -92,7 +98,7 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 
 `route` 说明：
 
-- `fixed_qa`：命中固定问答，没有调用模型。
+- `fixed_qa`：命中固定问答，没有调用模型。会对 ASR 文本做基础归一化，去掉空格、标点和常见前缀后再匹配。
 - `ollama`：调用本地小模型。
 - `blocked_input`：输入命中敏感词。
 - `blocked_output`：模型输出命中敏感词。
@@ -101,9 +107,10 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 
 当前语音链路：
 
-- 唤醒监听：`voice-agent` 常驻监听“嗨小江”。
+- 唤醒监听：`voice-agent` 默认监听“嗨小江 / 嘿小江 / 小江”，用于提升实际唤醒稳定性。
 - ASR 输入：唤醒后使用 sherpa-onnx streaming ASR，把识别文本 POST 到 `/chat`。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
+- 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
 - TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。
 - 待接入：CAN 状态屏，请求开始时发 `THINKING`，播放语音时发 `SPEAKING`，结束后发 `IDLE`。
 
@@ -120,6 +127,13 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 ```bash
 ./scripts/start-voice-agent.sh
 docker logs -f chat2m-voice-agent
+```
+
+更换唤醒词不需要改代码，启动时传入候选词即可；多个候选词会在启动时自动生成 sherpa-onnx KWS token：
+
+```bash
+./scripts/start-voice-agent.sh --wake-words "嗨小江,嘿小江,小江"
+./scripts/start-voice-agent.sh --wake-word "你好小江" --wake-word "小江"
 ```
 
 首次启动会自动下载 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型到 `models/`。这些模型文件只保留在本地，不提交到 Git。

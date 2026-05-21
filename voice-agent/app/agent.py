@@ -27,8 +27,15 @@ ASR_MODEL_DIR = Path(
     os.getenv("ASR_MODEL_DIR", str(MODELS_DIR / "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"))
 )
 KEYWORDS_RAW = Path(os.getenv("KEYWORDS_RAW", "/app/config/wake_keywords_raw.txt"))
-KEYWORDS_FILE = Path(os.getenv("KEYWORDS_FILE", "/app/config/wake_keywords.txt"))
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_keywords.txt"
+GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_keywords_raw.txt"
+PRETOKENIZED_KEYWORDS_FILE = os.getenv("KEYWORDS_FILE", "")
+WAKE_WORDS_ENV = os.getenv("WAKE_WORDS", "")
+WAKE_WORDS = tuple(
+    word.strip()
+    for word in WAKE_WORDS_ENV.split(",")
+    if word.strip()
+)
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://voice-gateway:8080/chat")
 INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE", "ReSpeaker")
@@ -60,7 +67,10 @@ SESSION_END_RESPONSE = os.getenv("SESSION_END_RESPONSE", "好的，我先待机"
 MAX_SESSION_TURNS = int(os.getenv("MAX_SESSION_TURNS", "8"))
 SESSION_END_PHRASES = tuple(
     phrase.strip()
-    for phrase in os.getenv("SESSION_END_PHRASES", "退出,结束,不用了,没事了,再见,拜拜,回到待机").split(",")
+    for phrase in os.getenv(
+        "SESSION_END_PHRASES",
+        "退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样",
+    ).split(",")
     if phrase.strip()
 )
 
@@ -72,6 +82,19 @@ def log(message: str) -> None:
 def require_file(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"missing required file: {path}")
+
+
+def wake_words_display() -> str:
+    if WAKE_WORDS:
+        return " / ".join(WAKE_WORDS)
+    if KEYWORDS_RAW.is_file():
+        labels = []
+        for line in KEYWORDS_RAW.read_text(encoding="utf-8").splitlines():
+            if "@" in line:
+                labels.append(line.rsplit("@", 1)[-1].strip())
+        if labels:
+            return " / ".join(labels)
+    return "未配置"
 
 
 def select_input_device(selector: str) -> int | str | None:
@@ -94,19 +117,22 @@ def ensure_keywords_file() -> Path:
     require_file(KWS_MODEL_DIR / "tokens.txt")
     require_file(KWS_MODEL_DIR / "en.phone")
 
-    if KEYWORDS_FILE.is_file():
-        return KEYWORDS_FILE
+    if PRETOKENIZED_KEYWORDS_FILE:
+        keywords_file = Path(PRETOKENIZED_KEYWORDS_FILE)
+        require_file(keywords_file)
+        return keywords_file
 
-    keywords_file = KEYWORDS_FILE
-    if not os.getenv("KEYWORDS_FILE"):
-        keywords_file = GENERATED_KEYWORDS_FILE
-        if keywords_file.is_file():
-            return keywords_file
+    raw_file = KEYWORDS_RAW
+    if WAKE_WORDS:
+        raw_file = GENERATED_KEYWORDS_RAW
+        raw_file.parent.mkdir(parents=True, exist_ok=True)
+        raw_file.write_text("".join(f"{word} @{word}\n" for word in WAKE_WORDS), encoding="utf-8")
 
-    if not KEYWORDS_RAW.is_file():
-        KEYWORDS_RAW.parent.mkdir(parents=True, exist_ok=True)
-        KEYWORDS_RAW.write_text("嗨小江 @嗨小江\n", encoding="utf-8")
+    if not raw_file.is_file():
+        raw_file.parent.mkdir(parents=True, exist_ok=True)
+        raw_file.write_text("嗨小江 @嗨小江\n嘿小江 @嘿小江\n小江 @小江\n", encoding="utf-8")
 
+    keywords_file = GENERATED_KEYWORDS_FILE
     keywords_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "sherpa-onnx-cli",
@@ -117,15 +143,13 @@ def ensure_keywords_file() -> Path:
         "phone+ppinyin",
         "--lexicon",
         str(KWS_MODEL_DIR / "en.phone"),
-        str(KEYWORDS_RAW),
+        str(raw_file),
         str(keywords_file),
     ]
-    log("generating wake keyword tokens")
+    log(f"generating wake keyword tokens: {wake_words_display()}")
     result = subprocess.run(cmd, check=False)
-    if result.returncode != 0 and not keywords_file.is_file():
-        raise RuntimeError(f"wake keyword token generation failed with exit code {result.returncode}")
     if result.returncode != 0:
-        log(f"keyword token generator returned {result.returncode}; output exists, continuing")
+        raise RuntimeError(f"wake keyword token generation failed with exit code {result.returncode}")
     return keywords_file
 
 
@@ -417,7 +441,7 @@ def main() -> None:
     beep_path = Path(tempfile.gettempdir()) / "chat2m_wake.wav"
     write_beep(beep_path)
 
-    log("wake listener active: 嗨小江")
+    log(f"wake listener active: {wake_words_display()}")
     with sd.InputStream(
         channels=INPUT_CHANNELS,
         dtype="float32",
@@ -440,7 +464,7 @@ def main() -> None:
                         log(f"wake handling failed: {exc}")
                     drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
                     stream = kws.create_stream()
-                    log("wake listener active: 嗨小江")
+                    log(f"wake listener active: {wake_words_display()}")
                     break
 
 

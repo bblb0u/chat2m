@@ -9,6 +9,34 @@ NETWORK_NAME="chat2m-local"
 OLLAMA_CONTAINER="chat2m-ollama"
 GATEWAY_CONTAINER="chat2m-voice-gateway"
 
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/start-local.sh [--model MODEL]
+
+Options:
+  -m, --model MODEL   Ollama model to pull and run, for example qwen3:4b-instruct.
+  -h, --help          Show this help.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -m|--model)
+      MODEL="${2:?missing model after $1}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 cd "$ROOT_DIR"
 
 docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create "$NETWORK_NAME" >/dev/null

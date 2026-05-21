@@ -4,6 +4,51 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NETWORK_NAME="chat2m-local"
 CONTAINER_NAME="chat2m-voice-agent"
+WAKE_WORDS_VALUE="${WAKE_WORDS:-嗨小江,嘿小江,小江}"
+WAKE_WORDS_SET=0
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/start-voice-agent.sh [--wake-word WORD] [--wake-words WORDS]
+
+Options:
+  --wake-word WORD    Add one wake word. Can be used more than once.
+  --wake-words WORDS  Comma-separated wake words, for example "嗨小江,嘿小江,小江".
+  -h, --help          Show this help.
+EOF
+}
+
+add_wake_word() {
+  if [ "$WAKE_WORDS_SET" -eq 0 ]; then
+    WAKE_WORDS_VALUE="$1"
+    WAKE_WORDS_SET=1
+  else
+    WAKE_WORDS_VALUE="$WAKE_WORDS_VALUE,$1"
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --wake-word)
+      add_wake_word "${2:?missing wake word after $1}"
+      shift 2
+      ;;
+    --wake-words)
+      WAKE_WORDS_VALUE="${2:?missing wake words after $1}"
+      WAKE_WORDS_SET=1
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 cd "$ROOT_DIR"
 
@@ -29,6 +74,9 @@ docker run -d \
   -e AUDIO_INPUT_CHANNEL_INDEX="${AUDIO_INPUT_CHANNEL_INDEX:-0}" \
   -e AUDIO_OUTPUT_DEVICE="${AUDIO_OUTPUT_DEVICE:-default}" \
   -e GATEWAY_URL="${GATEWAY_URL:-http://chat2m-voice-gateway:8080/chat}" \
+  -e WAKE_WORDS="$WAKE_WORDS_VALUE" \
+  -e KWS_KEYWORDS_SCORE="${KWS_KEYWORDS_SCORE:-1.5}" \
+  -e KWS_KEYWORDS_THRESHOLD="${KWS_KEYWORDS_THRESHOLD:-0.25}" \
   -e COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-10}" \
   -e COMMAND_LEADING_SILENCE_SECONDS="${COMMAND_LEADING_SILENCE_SECONDS:-4}" \
   -e SPEECH_RMS_THRESHOLD="${SPEECH_RMS_THRESHOLD:-0.006}" \
@@ -40,11 +88,12 @@ docker run -d \
   -e WAKE_RESPONSE="${WAKE_RESPONSE:-有什么可以帮助您的}" \
   -e SESSION_IDLE_RESPONSE="${SESSION_IDLE_RESPONSE:-}" \
   -e SESSION_END_RESPONSE="${SESSION_END_RESPONSE:-好的，我先待机}" \
+  -e SESSION_END_PHRASES="${SESSION_END_PHRASES:-退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样}" \
   -e MAX_SESSION_TURNS="${MAX_SESSION_TURNS:-8}" \
   -v "$ROOT_DIR/models:/models" \
   -v "$ROOT_DIR/config:/app/config:ro" \
   chat2m/voice-agent:local >/dev/null
 
 echo "Chat2M voice agent is running."
-echo "Wake word: 嗨小江"
+echo "Wake words: $WAKE_WORDS_VALUE"
 echo "Logs: docker logs -f $CONTAINER_NAME"
