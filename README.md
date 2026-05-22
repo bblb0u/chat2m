@@ -117,22 +117,6 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 换机器时迁移 `/opt/chat2m/data` 即可。`/dev`、`/dev/snd`、`/etc/asound.conf` 是宿主机设备和系统音频配置，不放进项目数据目录。
 
-## Docker Hub 发布
-
-GitHub Actions 会在推送 `main`、推送 `v*` tag 或手动触发时构建并推送镜像到 Docker Hub：
-
-- `DOCKERHUB_USERNAME`：Docker Hub 用户名或组织名。
-- `DOCKERHUB_TOKEN`：Docker Hub access token。
-
-可以用 GitHub CLI 写入：
-
-```bash
-gh secret set DOCKERHUB_USERNAME --repo bblb0o/chat2m --body "你的 Docker Hub 用户名"
-gh secret set DOCKERHUB_TOKEN --repo bblb0o/chat2m --body "你的 Docker Hub access token"
-```
-
-镜像名为 `${DOCKERHUB_USERNAME}/ollama`、`${DOCKERHUB_USERNAME}/chat2m-gateway`、`${DOCKERHUB_USERNAME}/chat2m-wake`、`${DOCKERHUB_USERNAME}/chat2m-speech`、`${DOCKERHUB_USERNAME}/chat2m-status`。
-
 停止：
 
 ```bash
