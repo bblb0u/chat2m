@@ -2,11 +2,15 @@ name: chat2m
 
 services:
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    build:
+      context: ./ollama
+    image: chat2m/ollama:local
+    pull_policy: build
     container_name: ollama
     restart: unless-stopped
     runtime: nvidia
     environment:
+      OLLAMA_MODEL: qwen3:4b-instruct
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       OLLAMA_LLM_LIBRARY: cuda_jetpack5
@@ -15,7 +19,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama-data:/root/.ollama
+      - ./ollama-data:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
@@ -26,14 +30,13 @@ services:
   chat2m-gateway:
     build:
       context: ./voice-gateway
-      args:
-        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
     image: chat2m/gateway:local
+    pull_policy: build
     container_name: chat2m-gateway
     restart: unless-stopped
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct}
+      OLLAMA_MODEL: qwen3:4b-instruct
       PROFILE_PATH: /app/config/profile.yaml
       SAFETY_PATH: /app/config/safety.yaml
     ports:
@@ -48,47 +51,52 @@ services:
     build:
       context: ./voice-agent
     image: chat2m/status:local
+    pull_policy: build
     container_name: chat2m-status
     restart: unless-stopped
-    devices:
-      - ${DISPLAY_SERIAL_DEVICE:-/dev/ttyACM0}:${DISPLAY_SERIAL_DEVICE:-/dev/ttyACM0}
+    privileged: true
+    command: ["python3", "-m", "app.status"]
+    volumes:
+      - /dev:/host-dev
     environment:
-      VOICE_MODULE: app.status
+      VOICE_MODELS_REQUIRED: "0"
       VOICE_ROLE: chat2m-status
-      DISPLAY_SERIAL_PORT: ${DISPLAY_SERIAL_PORT:-/dev/ttyACM0}
-      DISPLAY_SERIAL_BAUD: ${DISPLAY_SERIAL_BAUD:-115200}
+      DISPLAY_SERIAL_PORT: auto
+      DISPLAY_SERIAL_CANDIDATES: /dev/ttyACM0,/dev/ttyACM1,/dev/ttyUSB0,/dev/ttyUSB1,/host-dev/ttyACM0,/host-dev/ttyACM1,/host-dev/ttyUSB0,/host-dev/ttyUSB1
+      DISPLAY_SERIAL_BAUD: "115200"
       STATUS_PORT: 8091
 
   chat2m-speech:
     build:
       context: ./voice-agent
     image: chat2m/speech:local
+    pull_policy: build
     container_name: chat2m-speech
     restart: unless-stopped
     devices:
       - /dev/snd:/dev/snd
+    command: ["python3", "-m", "app.speech"]
     environment:
-      VOICE_MODULE: app.speech
       VOICE_ROLE: chat2m-speech
-      AUDIO_INPUT_DEVICE: ${AUDIO_INPUT_DEVICE:-ReSpeaker}
-      AUDIO_INPUT_CHANNELS: ${AUDIO_INPUT_CHANNELS:-1}
-      AUDIO_INPUT_CHANNEL_INDEX: ${AUDIO_INPUT_CHANNEL_INDEX:-0}
-      AUDIO_OUTPUT_DEVICE: ${AUDIO_OUTPUT_DEVICE:-plughw:CARD=ArrayUAC10,DEV=0}
+      AUDIO_INPUT_DEVICE: ReSpeaker
+      AUDIO_INPUT_CHANNELS: "1"
+      AUDIO_INPUT_CHANNEL_INDEX: "0"
+      AUDIO_OUTPUT_DEVICE: plughw:CARD=ArrayUAC10,DEV=0
       GATEWAY_URL: http://chat2m-gateway:8080/chat
       STATUS_URL: http://chat2m-status:8091/state
-      COMMAND_TIMEOUT_SECONDS: ${COMMAND_TIMEOUT_SECONDS:-10}
-      COMMAND_LEADING_SILENCE_SECONDS: ${COMMAND_LEADING_SILENCE_SECONDS:-4}
-      SPEECH_RMS_THRESHOLD: ${SPEECH_RMS_THRESHOLD:-0.006}
-      PIPER_MODEL: ${PIPER_MODEL:-/models/piper/zh_CN-huayan-medium/model.onnx}
-      PIPER_CONFIG: ${PIPER_CONFIG:-/models/piper/zh_CN-huayan-medium/model.onnx.json}
-      PIPER_SPEAKER: ${PIPER_SPEAKER:-0}
-      PIPER_LENGTH_SCALE: ${PIPER_LENGTH_SCALE:-0.9}
-      PIPER_VOLUME: ${PIPER_VOLUME:-1.0}
-      WAKE_RESPONSE: ${WAKE_RESPONSE:-有什么可以帮助您的}
-      SESSION_IDLE_RESPONSE: ${SESSION_IDLE_RESPONSE:-}
-      SESSION_END_RESPONSE: ${SESSION_END_RESPONSE:-好的，我先待机}
-      SESSION_END_PHRASES: ${SESSION_END_PHRASES:-退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样}
-      MAX_SESSION_TURNS: ${MAX_SESSION_TURNS:-8}
+      COMMAND_TIMEOUT_SECONDS: "10"
+      COMMAND_LEADING_SILENCE_SECONDS: "4"
+      SPEECH_RMS_THRESHOLD: "0.006"
+      PIPER_MODEL: /models/piper/zh_CN-huayan-medium/model.onnx
+      PIPER_CONFIG: /models/piper/zh_CN-huayan-medium/model.onnx.json
+      PIPER_SPEAKER: "0"
+      PIPER_LENGTH_SCALE: "0.9"
+      PIPER_VOLUME: "1.0"
+      WAKE_RESPONSE: 有什么可以帮助您的
+      SESSION_IDLE_RESPONSE: ""
+      SESSION_END_RESPONSE: 好的，我先待机
+      SESSION_END_PHRASES: 退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样
+      MAX_SESSION_TURNS: "8"
     volumes:
       - ./models:/models
       - ./config:/app/config:ro
@@ -103,21 +111,22 @@ services:
     build:
       context: ./voice-agent
     image: chat2m/wake:local
+    pull_policy: build
     container_name: chat2m-wake
     restart: unless-stopped
     devices:
       - /dev/snd:/dev/snd
+    command: ["python3", "-m", "app.wake"]
     environment:
-      VOICE_MODULE: app.wake
       VOICE_ROLE: chat2m-wake
-      AUDIO_INPUT_DEVICE: ${AUDIO_INPUT_DEVICE:-ReSpeaker}
-      AUDIO_INPUT_CHANNELS: ${AUDIO_INPUT_CHANNELS:-1}
-      AUDIO_INPUT_CHANNEL_INDEX: ${AUDIO_INPUT_CHANNEL_INDEX:-0}
+      AUDIO_INPUT_DEVICE: ReSpeaker
+      AUDIO_INPUT_CHANNELS: "1"
+      AUDIO_INPUT_CHANNEL_INDEX: "0"
       SPEECH_WAKE_URL: http://chat2m-speech:8090/wake
       STATUS_URL: http://chat2m-status:8091/state
-      WAKE_WORDS: ${WAKE_WORDS:-嗨小江,嘿小江,小江}
-      KWS_KEYWORDS_SCORE: ${KWS_KEYWORDS_SCORE:-1.5}
-      KWS_KEYWORDS_THRESHOLD: ${KWS_KEYWORDS_THRESHOLD:-0.25}
+      WAKE_WORDS: 嗨小江,嘿小江,小江
+      KWS_KEYWORDS_SCORE: "1.5"
+      KWS_KEYWORDS_THRESHOLD: "0.25"
     volumes:
       - ./models:/models
       - ./config:/app/config:ro
@@ -127,8 +136,3 @@ services:
         condition: service_started
       chat2m-status:
         condition: service_started
-
-volumes:
-  ollama-data:
-    name: chat2m-ollama-data
-    external: true

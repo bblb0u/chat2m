@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import sys
 import threading
 import time
@@ -11,11 +12,30 @@ from app.agent import DisplayClient, log
 
 
 DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
+DISPLAY_SERIAL_CANDIDATES = tuple(
+    candidate.strip()
+    for candidate in os.getenv(
+        "DISPLAY_SERIAL_CANDIDATES",
+        "/dev/ttyACM0,/dev/ttyACM1,/dev/ttyUSB0,/dev/ttyUSB1",
+    ).split(",")
+    if candidate.strip()
+)
 DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
 STATUS_HOST = os.getenv("STATUS_HOST", "0.0.0.0")
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8091"))
 
-display = DisplayClient(DISPLAY_SERIAL_PORT, DISPLAY_SERIAL_BAUD)
+
+def resolve_display_port(port: str) -> str:
+    if port and port.lower() != "auto":
+        return port
+    for candidate in DISPLAY_SERIAL_CANDIDATES:
+        if Path(candidate).exists():
+            return candidate
+    return ""
+
+
+display_port = resolve_display_port(DISPLAY_SERIAL_PORT)
+display = DisplayClient(display_port, DISPLAY_SERIAL_BAUD)
 state_lock = threading.Lock()
 last_state = {"state": "idle", "text": ""}
 
@@ -46,7 +66,7 @@ class StatusHandler(BaseHTTPRequestHandler):
             return
         with state_lock:
             state = dict(last_state)
-        self._send_json(200, {"ok": True, "display": bool(DISPLAY_SERIAL_PORT), **state})
+        self._send_json(200, {"ok": True, "display": bool(display_port), "port": display_port, **state})
 
     def do_POST(self) -> None:
         if self.path != "/state":
@@ -67,7 +87,7 @@ class StatusHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    log(f"display serial: {DISPLAY_SERIAL_PORT or 'disabled'}")
+    log(f"display serial: {display_port or 'disabled'}")
     set_state("idle")
     server = ThreadingHTTPServer((STATUS_HOST, STATUS_PORT), StatusHandler)
     log(f"status forwarder listening on {STATUS_HOST}:{STATUS_PORT}")

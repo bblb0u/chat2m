@@ -169,7 +169,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text
         if "model" in detail.lower() and "not found" in detail.lower():
-            detail = f"模型 {OLLAMA_MODEL} 还未下载，请先执行模型初始化或 ollama pull。"
+            detail = f"模型 {OLLAMA_MODEL} 还未下载完成，Ollama 容器会在后台自动拉取，请稍后重试。"
         raise HTTPException(status_code=502, detail=detail) from exc
     except httpx.ReadTimeout as exc:
         raise HTTPException(status_code=504, detail="Ollama 生成超时，建议先用固定问答或更短问题测试。") from exc

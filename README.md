@@ -12,13 +12,14 @@
 
 ## 快速启动
 
-当前机器没有安装 Docker Compose 插件时，可以直接运行：
+直接启动整套服务：
 
 ```bash
-./scripts/start-local.sh
+docker compose up -d
 ```
 
 Jetson 上会默认用 Docker 的 `nvidia` runtime 启动 Ollama，并设置 `JETSON_JETPACK=5` 与 `cuda_jetpack5` backend。
+`ollama` 容器启动时会自动检查并拉取默认模型 `qwen3:4b-instruct`。
 
 启动后接口：
 
@@ -38,38 +39,16 @@ curl -s http://localhost:8080/chat \
 停止服务：
 
 ```bash
-./scripts/stop-local.sh
+docker compose down
 ```
 
-## 使用 Docker Compose
-
-如果目标机器安装了 Docker Compose v2：
+如果只想启动文字对话网关：
 
 ```bash
-docker compose up -d ollama
-docker exec ollama ollama pull qwen3:4b-instruct
-docker compose up -d chat2m-gateway
+./scripts/start-local.sh
 ```
 
 默认模型使用 Qwen3 4B Instruct 非思考版，比 1.7B 和 `qwen2.5:3b` 更强，同时不会输出 `<think>` 思考块，更适合实时 TTS 语音播报。
-
-如需换更大的模型：
-
-```bash
-./scripts/start-local.sh --model qwen3:30b-instruct
-```
-
-也可以继续使用环境变量：
-
-```bash
-OLLAMA_MODEL=qwen3:30b-instruct ./scripts/start-local.sh
-```
-
-如果目标网络拉 Docker Hub 很慢，可以临时替换镜像来源：
-
-```bash
-OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
-```
 
 ## API
 
@@ -118,48 +97,19 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 
 ## 语音唤醒
 
-先确认 `chat2m-gateway` 和 Ollama 已启动：
+启动整套语音链路：
 
 ```bash
-./scripts/start-local.sh
+docker compose up -d
+docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 ```
 
-启动后台唤醒监听：
-
-```bash
-./scripts/start-voice-agent.sh
-docker compose -p chat2m logs -f chat2m-wake chat2m-speech chat2m-status
-```
-
-更换唤醒词不需要改代码，启动时传入候选词即可；多个候选词会在启动时自动生成 sherpa-onnx KWS token：
-
-```bash
-./scripts/start-voice-agent.sh --wake-words "嗨小江,嘿小江,小江"
-./scripts/start-voice-agent.sh --wake-word "你好小江" --wake-word "小江"
-```
+默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口或 Piper 语速，直接改 `docker-compose.yml` 里的 `chat2m-wake`、`chat2m-speech`、`chat2m-status` 配置。
 
 首次启动会自动下载 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型到 `models/`。这些模型文件只保留在本地，不提交到 Git。
-
-默认输入设备匹配 `ReSpeaker`，默认输出设备用 ReSpeaker USB 声卡 `plughw:CARD=ArrayUAC10,DEV=0`。可以覆盖：
-
-```bash
-AUDIO_INPUT_DEVICE=ReSpeaker AUDIO_OUTPUT_DEVICE=plughw:CARD=HDA,DEV=3 ./scripts/start-voice-agent.sh
-```
-
-Piper 语速可以用 `PIPER_LENGTH_SCALE` 调整，数值越大越慢：
-
-```bash
-PIPER_LENGTH_SCALE=1.0 ./scripts/start-voice-agent.sh
-```
-
-启动脚本会自动探测显示屏串口，优先使用 `/dev/ttyACM1`，其次 `/dev/ttyACM0`。如果端口不同，可以覆盖：
-
-```bash
-DISPLAY_SERIAL_DEVICE=/dev/ttyACM1 DISPLAY_SERIAL_PORT=/dev/ttyACM1 ./scripts/start-voice-agent.sh
-```
 
 停止：
 
 ```bash
-./scripts/stop-voice-agent.sh
+docker compose down
 ```

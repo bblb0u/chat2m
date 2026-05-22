@@ -11,10 +11,8 @@ from app.agent import (
     INPUT_CHANNELS,
     INPUT_DEVICE,
     KWS_MODEL_DIR,
-    POST_RESPONSE_DRAIN_SECONDS,
     SAMPLE_RATE,
     create_kws,
-    drain_audio,
     log,
     read_mono,
     select_input_device,
@@ -25,6 +23,7 @@ from app.agent import (
 SPEECH_WAKE_URL = os.getenv("SPEECH_WAKE_URL", "http://chat2m-speech:8090/wake")
 STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
 WAKE_COOLDOWN_SECONDS = float(os.getenv("WAKE_COOLDOWN_SECONDS", "1.0"))
+MIC_RELEASE_SECONDS = float(os.getenv("MIC_RELEASE_SECONDS", "0.25"))
 
 
 def post_json(url: str, payload: dict[str, str], timeout: float = 2.0) -> bool:
@@ -52,41 +51,38 @@ def main() -> None:
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
     kws = create_kws()
-    stream = kws.create_stream()
     chunk = int(0.1 * SAMPLE_RATE)
     set_state("idle")
-    log(f"wake listener active: {wake_words_display()}")
 
-    with sd.InputStream(
-        channels=INPUT_CHANNELS,
-        dtype="float32",
-        samplerate=SAMPLE_RATE,
-        device=input_device,
-        blocksize=chunk,
-    ) as audio:
-        while True:
-            samples = read_mono(audio, chunk)
-            stream.accept_waveform(SAMPLE_RATE, samples)
-            while kws.is_ready(stream):
-                kws.decode_stream(stream)
-                result = kws.get_result(stream)
-                if not result:
-                    continue
-                log(f"wake keyword matched: {result}")
-                set_state("listening", "wake")
-                kws.reset_stream(stream)
-                audio.stop()
-                try:
-                    if not trigger_speech():
-                        set_state("error", "speech service unavailable")
-                finally:
-                    audio.start()
-                drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
-                stream = kws.create_stream()
-                set_state("idle")
-                log(f"wake listener active: {wake_words_display()}")
-                time.sleep(WAKE_COOLDOWN_SECONDS)
-                break
+    while True:
+        stream = kws.create_stream()
+        matched = ""
+        log(f"wake listener active: {wake_words_display()}")
+        with sd.InputStream(
+            channels=INPUT_CHANNELS,
+            dtype="float32",
+            samplerate=SAMPLE_RATE,
+            device=input_device,
+            blocksize=chunk,
+        ) as audio:
+            while not matched:
+                samples = read_mono(audio, chunk)
+                stream.accept_waveform(SAMPLE_RATE, samples)
+                while kws.is_ready(stream):
+                    kws.decode_stream(stream)
+                    result = kws.get_result(stream)
+                    if not result:
+                        continue
+                    matched = result
+                    log(f"wake keyword matched: {matched}")
+                    set_state("listening", "wake")
+                    break
+
+        time.sleep(MIC_RELEASE_SECONDS)
+        if not trigger_speech():
+            set_state("error", "speech service unavailable")
+        set_state("idle")
+        time.sleep(WAKE_COOLDOWN_SECONDS)
 
 
 if __name__ == "__main__":

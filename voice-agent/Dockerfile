@@ -22,8 +22,8 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY entrypoint.sh /entrypoint.sh
 COPY app ./app
 
-ENV VOICE_MODULE=app.agent
-
-CMD ["sh", "-lc", "python3 -m ${VOICE_MODULE}"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python3", "-m", "app.agent"]
