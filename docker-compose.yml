@@ -1,7 +1,9 @@
+name: chat2m
+
 services:
   ollama:
     image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    container_name: chat2m-ollama
+    container_name: ollama
     restart: unless-stopped
     runtime: nvidia
     environment:
@@ -23,7 +25,7 @@ services:
 
   ollama-model-init:
     image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    container_name: chat2m-ollama-model-init
+    container_name: ollama-model-init
     profiles: ["init"]
     runtime: nvidia
     environment:
@@ -46,13 +48,13 @@ services:
         done
         ollama pull "$${OLLAMA_MODEL}"
 
-  voice-gateway:
+  chat2m-gateway:
     build:
       context: ./voice-gateway
       args:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
-    image: chat2m/voice-gateway:local
-    container_name: chat2m-voice-gateway
+    image: chat2m/gateway:local
+    container_name: chat2m-gateway
     restart: unless-stopped
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
@@ -67,27 +69,38 @@ services:
       ollama:
         condition: service_started
 
-  voice-agent:
+  chat2m-status:
     build:
       context: ./voice-agent
-    image: chat2m/voice-agent:local
-    container_name: chat2m-voice-agent
+    image: chat2m/status:local
+    container_name: chat2m-status
     restart: unless-stopped
-    profiles: ["voice"]
     devices:
-      - /dev/snd:/dev/snd
       - ${DISPLAY_SERIAL_DEVICE:-/dev/ttyACM0}:${DISPLAY_SERIAL_DEVICE:-/dev/ttyACM0}
     environment:
+      VOICE_MODULE: app.status
+      VOICE_ROLE: chat2m-status
+      DISPLAY_SERIAL_PORT: ${DISPLAY_SERIAL_PORT:-/dev/ttyACM0}
+      DISPLAY_SERIAL_BAUD: ${DISPLAY_SERIAL_BAUD:-115200}
+      STATUS_PORT: 8091
+
+  chat2m-speech:
+    build:
+      context: ./voice-agent
+    image: chat2m/speech:local
+    container_name: chat2m-speech
+    restart: unless-stopped
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      VOICE_MODULE: app.speech
+      VOICE_ROLE: chat2m-speech
       AUDIO_INPUT_DEVICE: ${AUDIO_INPUT_DEVICE:-ReSpeaker}
       AUDIO_INPUT_CHANNELS: ${AUDIO_INPUT_CHANNELS:-1}
       AUDIO_INPUT_CHANNEL_INDEX: ${AUDIO_INPUT_CHANNEL_INDEX:-0}
       AUDIO_OUTPUT_DEVICE: ${AUDIO_OUTPUT_DEVICE:-plughw:CARD=ArrayUAC10,DEV=0}
-      GATEWAY_URL: http://voice-gateway:8080/chat
-      DISPLAY_SERIAL_PORT: ${DISPLAY_SERIAL_PORT:-/dev/ttyACM0}
-      DISPLAY_SERIAL_BAUD: ${DISPLAY_SERIAL_BAUD:-115200}
-      WAKE_WORDS: ${WAKE_WORDS:-嗨小江,嘿小江,小江}
-      KWS_KEYWORDS_SCORE: ${KWS_KEYWORDS_SCORE:-1.5}
-      KWS_KEYWORDS_THRESHOLD: ${KWS_KEYWORDS_THRESHOLD:-0.25}
+      GATEWAY_URL: http://chat2m-gateway:8080/chat
+      STATUS_URL: http://chat2m-status:8091/state
       COMMAND_TIMEOUT_SECONDS: ${COMMAND_TIMEOUT_SECONDS:-10}
       COMMAND_LEADING_SILENCE_SECONDS: ${COMMAND_LEADING_SILENCE_SECONDS:-4}
       SPEECH_RMS_THRESHOLD: ${SPEECH_RMS_THRESHOLD:-0.006}
@@ -106,8 +119,40 @@ services:
       - ./config:/app/config:ro
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
-      voice-gateway:
+      chat2m-gateway:
+        condition: service_started
+      chat2m-status:
+        condition: service_started
+
+  chat2m-wake:
+    build:
+      context: ./voice-agent
+    image: chat2m/wake:local
+    container_name: chat2m-wake
+    restart: unless-stopped
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      VOICE_MODULE: app.wake
+      VOICE_ROLE: chat2m-wake
+      AUDIO_INPUT_DEVICE: ${AUDIO_INPUT_DEVICE:-ReSpeaker}
+      AUDIO_INPUT_CHANNELS: ${AUDIO_INPUT_CHANNELS:-1}
+      AUDIO_INPUT_CHANNEL_INDEX: ${AUDIO_INPUT_CHANNEL_INDEX:-0}
+      SPEECH_WAKE_URL: http://chat2m-speech:8090/wake
+      STATUS_URL: http://chat2m-status:8091/state
+      WAKE_WORDS: ${WAKE_WORDS:-嗨小江,嘿小江,小江}
+      KWS_KEYWORDS_SCORE: ${KWS_KEYWORDS_SCORE:-1.5}
+      KWS_KEYWORDS_THRESHOLD: ${KWS_KEYWORDS_THRESHOLD:-0.25}
+    volumes:
+      - ./models:/models
+      - ./config:/app/config:ro
+      - /etc/asound.conf:/etc/asound.conf:ro
+    depends_on:
+      chat2m-speech:
+        condition: service_started
+      chat2m-status:
         condition: service_started
 
 volumes:
   ollama-data:
+    name: chat2m-ollama-data

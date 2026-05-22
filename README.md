@@ -3,8 +3,10 @@
 这个仓库当前先落地项目规划里的“对话路由”最小闭环：
 
 - `ollama` 容器运行本地小模型，默认 `qwen3:4b-instruct`。
-- `voice-gateway` 容器提供 FastAPI 对话接口。
-- `voice-agent` 容器提供 ReSpeaker 唤醒、离线 ASR、连续对话和本地 Piper TTS。
+- `chat2m-gateway` 容器提供 FastAPI 对话接口。
+- `chat2m-wake` 容器负责麦克风唤醒词监听。
+- `chat2m-speech` 容器负责离线 ASR、连续对话和本地 Piper TTS。
+- `chat2m-status` 容器负责把状态转发到 ESP32 显示屏。
 - `config/profile.yaml` 放机器人固定信息、固定问答和系统提示词。
 - `config/safety.yaml` 放第一层敏感词拦截。
 
@@ -46,7 +48,7 @@ curl -s http://localhost:8080/chat \
 ```bash
 docker compose up -d ollama
 docker compose --profile init run --rm ollama-model-init
-docker compose up -d voice-gateway
+docker compose up -d chat2m-gateway
 ```
 
 默认模型使用 Qwen3 4B Instruct 非思考版，比 1.7B 和 `qwen2.5:3b` 更强，同时不会输出 `<think>` 思考块，更适合实时 TTS 语音播报。
@@ -107,16 +109,16 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 
 当前语音链路：
 
-- 唤醒监听：`voice-agent` 默认监听“嗨小江 / 嘿小江 / 小江”，用于提升实际唤醒稳定性。
+- 唤醒监听：`chat2m-wake` 默认监听“嗨小江 / 嘿小江 / 小江”，用于提升实际唤醒稳定性。
 - ASR 输入：唤醒后使用 sherpa-onnx streaming ASR，把识别文本 POST 到 `/chat`。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
 - TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。
-- 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5B 通过 USB 串口接收 `IDLE` / `LISTENING` / `THINKING` / `SPEAKING` / `ERROR` 状态。
+- 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒
 
-先确认 `voice-gateway` 和 Ollama 已启动：
+先确认 `chat2m-gateway` 和 Ollama 已启动：
 
 ```bash
 ./scripts/start-local.sh
@@ -126,7 +128,7 @@ OLLAMA_IMAGE=<ollama镜像> PYTHON_IMAGE=<python镜像> ./scripts/start-local.sh
 
 ```bash
 ./scripts/start-voice-agent.sh
-docker logs -f chat2m-voice-agent
+docker compose -p chat2m logs -f chat2m-wake chat2m-speech chat2m-status
 ```
 
 更换唤醒词不需要改代码，启动时传入候选词即可；多个候选词会在启动时自动生成 sherpa-onnx KWS token：
@@ -150,10 +152,10 @@ Piper 语速可以用 `PIPER_LENGTH_SCALE` 调整，数值越大越慢：
 PIPER_LENGTH_SCALE=1.0 ./scripts/start-voice-agent.sh
 ```
 
-显示屏默认自动使用 `/dev/ttyACM0`。如果端口不同，可以覆盖：
+启动脚本会自动探测显示屏串口，优先使用 `/dev/ttyACM1`，其次 `/dev/ttyACM0`。如果端口不同，可以覆盖：
 
 ```bash
-DISPLAY_SERIAL_PORT=/dev/ttyACM1 ./scripts/start-voice-agent.sh
+DISPLAY_SERIAL_DEVICE=/dev/ttyACM1 DISPLAY_SERIAL_PORT=/dev/ttyACM1 ./scripts/start-voice-agent.sh
 ```
 
 停止：

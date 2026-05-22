@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-docker rm -f chat2m-voice-gateway >/dev/null 2>&1 || true
-docker rm -f chat2m-ollama >/dev/null 2>&1 || true
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 
-echo "Chat2M local chat containers stopped."
+docker compose -p chat2m down
+
+echo "Chat2M containers stopped."

@@ -2,13 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NETWORK_NAME="chat2m-local"
-CONTAINER_NAME="chat2m-voice-agent"
 WAKE_WORDS_VALUE="${WAKE_WORDS:-嗨小江,嘿小江,小江}"
 WAKE_WORDS_SET=0
-AUDIO_CONFIG_MOUNTS=()
-DISPLAY_DEVICE_ARGS=()
-DISPLAY_SERIAL_PORT_VALUE="${DISPLAY_SERIAL_PORT:-}"
 
 usage() {
   cat <<'EOF'
@@ -55,16 +50,12 @@ done
 
 cd "$ROOT_DIR"
 
-if [ -f /etc/asound.conf ]; then
-  AUDIO_CONFIG_MOUNTS+=("-v" "/etc/asound.conf:/etc/asound.conf:ro")
-fi
-
-if [ -z "$DISPLAY_SERIAL_PORT_VALUE" ] && [ -e /dev/ttyACM0 ]; then
-  DISPLAY_SERIAL_PORT_VALUE="/dev/ttyACM0"
-fi
-
-if [ -n "$DISPLAY_SERIAL_PORT_VALUE" ] && [ -e "$DISPLAY_SERIAL_PORT_VALUE" ]; then
-  DISPLAY_DEVICE_ARGS+=("--device" "$DISPLAY_SERIAL_PORT_VALUE:$DISPLAY_SERIAL_PORT_VALUE")
+if [ -z "${DISPLAY_SERIAL_DEVICE:-}" ] && [ -e /dev/ttyACM1 ]; then
+  export DISPLAY_SERIAL_DEVICE=/dev/ttyACM1
+  export DISPLAY_SERIAL_PORT=/dev/ttyACM1
+elif [ -z "${DISPLAY_SERIAL_DEVICE:-}" ] && [ -e /dev/ttyACM0 ]; then
+  export DISPLAY_SERIAL_DEVICE=/dev/ttyACM0
+  export DISPLAY_SERIAL_PORT=/dev/ttyACM0
 fi
 
 if [ ! -d "$ROOT_DIR/models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20" ] || \
@@ -74,46 +65,14 @@ if [ ! -d "$ROOT_DIR/models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20" ] || 
   ./scripts/download-voice-models.sh
 fi
 
-docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create "$NETWORK_NAME" >/dev/null
-docker build -t chat2m/voice-agent:local ./voice-agent
+WAKE_WORDS="$WAKE_WORDS_VALUE" docker compose -p chat2m up -d --build \
+  ollama \
+  chat2m-gateway \
+  chat2m-status \
+  chat2m-speech \
+  chat2m-wake
 
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-
-docker run -d \
-  --name "$CONTAINER_NAME" \
-  --restart unless-stopped \
-  --network "$NETWORK_NAME" \
-  --device /dev/snd:/dev/snd \
-  "${DISPLAY_DEVICE_ARGS[@]}" \
-  -e AUDIO_INPUT_DEVICE="${AUDIO_INPUT_DEVICE:-ReSpeaker}" \
-  -e AUDIO_INPUT_CHANNELS="${AUDIO_INPUT_CHANNELS:-1}" \
-  -e AUDIO_INPUT_CHANNEL_INDEX="${AUDIO_INPUT_CHANNEL_INDEX:-0}" \
-  -e AUDIO_OUTPUT_DEVICE="${AUDIO_OUTPUT_DEVICE:-plughw:CARD=ArrayUAC10,DEV=0}" \
-  -e GATEWAY_URL="${GATEWAY_URL:-http://chat2m-voice-gateway:8080/chat}" \
-  -e DISPLAY_SERIAL_PORT="$DISPLAY_SERIAL_PORT_VALUE" \
-  -e DISPLAY_SERIAL_BAUD="${DISPLAY_SERIAL_BAUD:-115200}" \
-  -e WAKE_WORDS="$WAKE_WORDS_VALUE" \
-  -e KWS_KEYWORDS_SCORE="${KWS_KEYWORDS_SCORE:-1.5}" \
-  -e KWS_KEYWORDS_THRESHOLD="${KWS_KEYWORDS_THRESHOLD:-0.25}" \
-  -e COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-10}" \
-  -e COMMAND_LEADING_SILENCE_SECONDS="${COMMAND_LEADING_SILENCE_SECONDS:-4}" \
-  -e SPEECH_RMS_THRESHOLD="${SPEECH_RMS_THRESHOLD:-0.006}" \
-  -e PIPER_MODEL="${PIPER_MODEL:-/models/piper/zh_CN-huayan-medium/model.onnx}" \
-  -e PIPER_CONFIG="${PIPER_CONFIG:-/models/piper/zh_CN-huayan-medium/model.onnx.json}" \
-  -e PIPER_SPEAKER="${PIPER_SPEAKER:-0}" \
-  -e PIPER_LENGTH_SCALE="${PIPER_LENGTH_SCALE:-0.9}" \
-  -e PIPER_VOLUME="${PIPER_VOLUME:-1.0}" \
-  -e WAKE_RESPONSE="${WAKE_RESPONSE:-有什么可以帮助您的}" \
-  -e SESSION_IDLE_RESPONSE="${SESSION_IDLE_RESPONSE:-}" \
-  -e SESSION_END_RESPONSE="${SESSION_END_RESPONSE:-好的，我先待机}" \
-  -e SESSION_END_PHRASES="${SESSION_END_PHRASES:-退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样}" \
-  -e MAX_SESSION_TURNS="${MAX_SESSION_TURNS:-8}" \
-  -v "$ROOT_DIR/models:/models" \
-  -v "$ROOT_DIR/config:/app/config:ro" \
-  "${AUDIO_CONFIG_MOUNTS[@]}" \
-  chat2m/voice-agent:local >/dev/null
-
-echo "Chat2M voice agent is running."
+echo "Chat2M voice services are running."
 echo "Wake words: $WAKE_WORDS_VALUE"
-echo "Display serial: ${DISPLAY_SERIAL_PORT_VALUE:-disabled}"
-echo "Logs: docker logs -f $CONTAINER_NAME"
+echo "Display serial: ${DISPLAY_SERIAL_PORT:-disabled}"
+echo "Logs: docker compose -p chat2m logs -f chat2m-wake chat2m-speech chat2m-status"

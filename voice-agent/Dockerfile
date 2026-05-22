@@ -24,4 +24,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-CMD ["python3", "-m", "app.agent"]
+ENV VOICE_MODULE=app.agent
+
+CMD ["sh", "-lc", "python3 -m ${VOICE_MODULE}"]

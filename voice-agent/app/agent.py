@@ -40,7 +40,7 @@ WAKE_WORDS = tuple(
     if word.strip()
 )
 
-GATEWAY_URL = os.getenv("GATEWAY_URL", "http://voice-gateway:8080/chat")
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://chat2m-gateway:8080/chat")
 DISPLAY_SERIAL_PORT = os.getenv("DISPLAY_SERIAL_PORT", "")
 DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
 INPUT_DEVICE = os.getenv("AUDIO_INPUT_DEVICE", "ReSpeaker")
@@ -81,7 +81,8 @@ SESSION_END_PHRASES = tuple(
 
 
 def log(message: str) -> None:
-    print(f"[voice-agent] {message}", flush=True)
+    role = os.getenv("VOICE_ROLE", "chat2m-speech")
+    print(f"[{role}] {message}", flush=True)
 
 
 def require_file(path: Path) -> None:

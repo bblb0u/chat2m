@@ -27,4 +27,4 @@ idf.py -p /dev/ttyACM0 flash
 
 Use ESP-IDF 5.5.x for this board. The Waveshare examples require ESP-IDF 5.4.0 or newer, and this firmware has been verified with ESP-IDF 5.5.4. This board uses an ST7796 LCD controller and FT6336 touch controller.
 
-The boot sequence shows red, green, blue, and white bars for a few seconds before the Chat2M status UI starts. That makes it easier to distinguish a panel data-path issue from a voice-agent status issue.
+The boot sequence clears the panel to black before the Chat2M status UI starts. Status updates are normally forwarded by the `chat2m-status` container.
