@@ -65,8 +65,20 @@ if [ ! -d "$ROOT_DIR/models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20" ] || 
   ./scripts/download-voice-models.sh
 fi
 
-WAKE_WORDS="$WAKE_WORDS_VALUE" docker compose -p chat2m up -d --build \
-  ollama \
+MODEL="${OLLAMA_MODEL:-qwen3:4b-instruct}"
+
+docker volume inspect chat2m-ollama-data >/dev/null 2>&1 || docker volume create chat2m-ollama-data >/dev/null
+docker compose -p chat2m up -d ollama
+
+until docker exec ollama ollama list >/dev/null 2>&1; do
+  sleep 2
+done
+
+if ! docker exec ollama ollama list | awk 'NR > 1 {print $1}' | grep -qx "$MODEL"; then
+  docker exec ollama ollama pull "$MODEL"
+fi
+
+OLLAMA_MODEL="$MODEL" WAKE_WORDS="$WAKE_WORDS_VALUE" docker compose -p chat2m up -d --build \
   chat2m-gateway \
   chat2m-status \
   chat2m-speech \
@@ -74,5 +86,6 @@ WAKE_WORDS="$WAKE_WORDS_VALUE" docker compose -p chat2m up -d --build \
 
 echo "Chat2M voice services are running."
 echo "Wake words: $WAKE_WORDS_VALUE"
+echo "Model: $MODEL"
 echo "Display serial: ${DISPLAY_SERIAL_PORT:-disabled}"
 echo "Logs: docker compose -p chat2m logs -f chat2m-wake chat2m-speech chat2m-status"

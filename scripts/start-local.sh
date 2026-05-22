@@ -34,8 +34,18 @@ done
 
 cd "$ROOT_DIR"
 
-OLLAMA_MODEL="$MODEL" docker compose -p chat2m up -d --build ollama chat2m-gateway
-docker compose -p chat2m --profile init run --rm ollama-model-init
+docker volume inspect chat2m-ollama-data >/dev/null 2>&1 || docker volume create chat2m-ollama-data >/dev/null
+docker compose -p chat2m up -d ollama
+
+until docker exec ollama ollama list >/dev/null 2>&1; do
+  sleep 2
+done
+
+if ! docker exec ollama ollama list | awk 'NR > 1 {print $1}' | grep -qx "$MODEL"; then
+  docker exec ollama ollama pull "$MODEL"
+fi
+
+OLLAMA_MODEL="$MODEL" docker compose -p chat2m up -d --build chat2m-gateway
 
 echo "Chat2M local chat is running."
 echo "API:    http://localhost:8080/chat"

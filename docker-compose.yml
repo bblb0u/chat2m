@@ -23,31 +23,6 @@ services:
       retries: 5
       start_period: 20s
 
-  ollama-model-init:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    container_name: ollama-model-init
-    profiles: ["init"]
-    runtime: nvidia
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct}
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      OLLAMA_LLM_LIBRARY: cuda_jetpack5
-      JETSON_JETPACK: "5"
-      LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
-    depends_on:
-      ollama:
-        condition: service_started
-    entrypoint:
-      - /bin/sh
-      - -lc
-      - |
-        until ollama list >/dev/null 2>&1; do
-          sleep 2
-        done
-        ollama pull "$${OLLAMA_MODEL}"
-
   chat2m-gateway:
     build:
       context: ./voice-gateway
@@ -156,3 +131,4 @@ services:
 volumes:
   ollama-data:
     name: chat2m-ollama-data
+    external: true

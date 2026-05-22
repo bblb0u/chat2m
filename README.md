@@ -47,7 +47,7 @@ curl -s http://localhost:8080/chat \
 
 ```bash
 docker compose up -d ollama
-docker compose --profile init run --rm ollama-model-init
+docker exec ollama ollama pull qwen3:4b-instruct
 docker compose up -d chat2m-gateway
 ```
 
