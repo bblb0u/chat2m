@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .agents/
 .codex/
+data/
 ollama-data/
 models/
 tools/

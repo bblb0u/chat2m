@@ -19,11 +19,12 @@ RUN apt-get update \
       python3-sentencepiece \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY voice-agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY entrypoint.sh /entrypoint.sh
-COPY app ./app
+COPY config /defaults/config
+COPY voice-agent/entrypoint.sh /entrypoint.sh
+COPY voice-agent/app ./app
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-m", "app.agent"]

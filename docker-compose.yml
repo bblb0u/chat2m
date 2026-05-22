@@ -3,8 +3,9 @@ name: chat2m
 services:
   ollama:
     build:
-      context: ./ollama
-    image: chat2m/ollama:local
+      context: .
+      dockerfile: ollama/Dockerfile
+    image: ollama:local
     pull_policy: build
     container_name: ollama
     restart: unless-stopped
@@ -19,7 +20,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ./ollama-data:/root/.ollama
+      - ./data/ollama:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 30s
@@ -29,8 +30,9 @@ services:
 
   chat2m-gateway:
     build:
-      context: ./voice-gateway
-    image: chat2m/gateway:local
+      context: .
+      dockerfile: voice-gateway/Dockerfile
+    image: chat2m-gateway:local
     pull_policy: build
     container_name: chat2m-gateway
     restart: unless-stopped
@@ -42,21 +44,23 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./config:/app/config:ro
+      - ./data/config:/app/config
     depends_on:
       ollama:
         condition: service_started
 
   chat2m-status:
     build:
-      context: ./voice-agent
-    image: chat2m/status:local
+      context: .
+      dockerfile: voice-agent/Dockerfile
+    image: chat2m-status:local
     pull_policy: build
     container_name: chat2m-status
     restart: unless-stopped
     privileged: true
     command: ["python3", "-m", "app.status"]
     volumes:
+      - ./data/config:/app/config
       - /dev:/host-dev
     environment:
       VOICE_MODELS_REQUIRED: "0"
@@ -68,8 +72,9 @@ services:
 
   chat2m-speech:
     build:
-      context: ./voice-agent
-    image: chat2m/speech:local
+      context: .
+      dockerfile: voice-agent/Dockerfile
+    image: chat2m-speech:local
     pull_policy: build
     container_name: chat2m-speech
     restart: unless-stopped
@@ -98,8 +103,8 @@ services:
       SESSION_END_PHRASES: 退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样
       MAX_SESSION_TURNS: "8"
     volumes:
-      - ./models:/models
-      - ./config:/app/config:ro
+      - ./data/models:/models
+      - ./data/config:/app/config
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2m-gateway:
@@ -109,8 +114,9 @@ services:
 
   chat2m-wake:
     build:
-      context: ./voice-agent
-    image: chat2m/wake:local
+      context: .
+      dockerfile: voice-agent/Dockerfile
+    image: chat2m-wake:local
     pull_policy: build
     container_name: chat2m-wake
     restart: unless-stopped
@@ -128,8 +134,8 @@ services:
       KWS_KEYWORDS_SCORE: "1.5"
       KWS_KEYWORDS_THRESHOLD: "0.25"
     volumes:
-      - ./models:/models
-      - ./config:/app/config:ro
+      - ./data/models:/models
+      - ./data/config:/app/config
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2m-speech:

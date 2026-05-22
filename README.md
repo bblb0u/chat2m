@@ -7,8 +7,7 @@
 - `chat2m-wake` 容器负责麦克风唤醒词监听。
 - `chat2m-speech` 容器负责离线 ASR、连续对话和本地 Piper TTS。
 - `chat2m-status` 容器负责把状态转发到 ESP32 显示屏。
-- `config/profile.yaml` 放机器人固定信息、固定问答和系统提示词。
-- `config/safety.yaml` 放第一层敏感词拦截。
+- `config/` 放默认配置模板；运行时配置会初始化到 `data/config/`。
 
 ## 快速启动
 
@@ -19,7 +18,7 @@ docker compose up -d
 ```
 
 Jetson 上会默认用 Docker 的 `nvidia` runtime 启动 Ollama，并设置 `JETSON_JETPACK=5` 与 `cuda_jetpack5` backend。
-`ollama` 容器启动时会自动检查并拉取默认模型 `qwen3:4b-instruct`。
+`ollama` 容器启动时会在后台检查默认模型 `qwen3:4b-instruct`，可用则复用，不可用会删除后重新拉取。
 
 启动后接口：
 
@@ -106,7 +105,33 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口或 Piper 语速，直接改 `docker-compose.yml` 里的 `chat2m-wake`、`chat2m-speech`、`chat2m-status` 配置。
 
-首次启动会自动下载 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型到 `models/`。这些模型文件只保留在本地，不提交到 Git。
+首次启动会自动检查 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
+
+## 数据目录
+
+可迁移运行时数据统一放在 `data/`，不提交到 Git：
+
+- `data/config/`：运行时配置，从仓库 `config/` 默认模板初始化。
+- `data/models/`：唤醒词、ASR、TTS 模型。
+- `data/ollama/`：Ollama 模型、manifest 和本地运行数据。
+
+换机器时迁移 `/opt/chat2m/data` 即可。`/dev`、`/dev/snd`、`/etc/asound.conf` 是宿主机设备和系统音频配置，不放进项目数据目录。
+
+## Docker Hub 发布
+
+GitHub Actions 会在推送 `main`、推送 `v*` tag 或手动触发时构建并推送镜像到 Docker Hub：
+
+- `DOCKERHUB_USERNAME`：Docker Hub 用户名或组织名。
+- `DOCKERHUB_TOKEN`：Docker Hub access token。
+
+可以用 GitHub CLI 写入：
+
+```bash
+gh secret set DOCKERHUB_USERNAME --repo bblb0o/chat2m --body "你的 Docker Hub 用户名"
+gh secret set DOCKERHUB_TOKEN --repo bblb0o/chat2m --body "你的 Docker Hub access token"
+```
+
+镜像名为 `${DOCKERHUB_USERNAME}/ollama`、`${DOCKERHUB_USERNAME}/chat2m-gateway`、`${DOCKERHUB_USERNAME}/chat2m-wake`、`${DOCKERHUB_USERNAME}/chat2m-speech`、`${DOCKERHUB_USERNAME}/chat2m-status`。
 
 停止：
 

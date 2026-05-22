@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODELS_DIR="$ROOT_DIR/models"
+MODELS_DIR="$ROOT_DIR/data/models"
 mkdir -p "$MODELS_DIR"
 
 download_and_extract() {
