@@ -1,42 +1,63 @@
 #include "bsp_touch.h"
 
-#include "bsp_i2c.h"
-#include "freertos/FreeRTOS.h"
+#include "esp_check.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_touch.h"
+#include "esp_lcd_touch_ft6336.h"
 
 static uint16_t g_rotation = 0;
 static uint16_t g_width = 0;
 static uint16_t g_height = 0;
+static esp_lcd_touch_handle_t g_touch_handle = NULL;
+static touch_data_t g_touch_data = {};
 
-static i2c_master_dev_handle_t dev_handle;
-static touch_data_t g_touch_data;
+static void rotate_point(uint16_t in_x, uint16_t in_y, coords_t *out)
+{
+    switch (g_rotation) {
+    case 1:
+        out->x = in_y;
+        out->y = g_height - 1 - in_x;
+        break;
+    case 2:
+        out->x = g_width - 1 - in_x;
+        out->y = g_height - 1 - in_y;
+        break;
+    case 3:
+        out->x = g_width - 1 - in_y;
+        out->y = in_x;
+        break;
+    default:
+        out->x = in_x;
+        out->y = in_y;
+        break;
+    }
+}
 
 void bsp_touch_read(void)
 {
-    uint8_t data[14] = {0};
-    const uint8_t read_cmd[11] = {0xb5, 0xab, 0xa5, 0x5a, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00};
+    esp_lcd_touch_point_data_t points[MAX_TOUCH_POINTS] = {};
+    uint8_t point_num = 0;
 
     g_touch_data.touch_num = 0;
-
-    if (!bsp_i2c_lock(0)) {
+    if (g_touch_handle == NULL) {
         return;
     }
 
-    esp_err_t err = i2c_master_transmit_receive(
-        dev_handle, read_cmd, sizeof(read_cmd), data, sizeof(data), pdMS_TO_TICKS(1000));
-    bsp_i2c_unlock();
-    if (err != ESP_OK) {
+    if (esp_lcd_touch_read_data(g_touch_handle) != ESP_OK) {
         return;
     }
 
-    if (data[0] == 0xff || data[1] == 0 || data[1] > MAX_TOUCH_POINTS ||
-        data[2] == 0 || data[3] < 2 || data[5] < 2) {
+    if (esp_lcd_touch_get_data(g_touch_handle, points, &point_num, MAX_TOUCH_POINTS) != ESP_OK) {
         return;
     }
 
-    g_touch_data.touch_num = data[1];
-    for (int i = 0; i < g_touch_data.touch_num; i++) {
-        g_touch_data.coords[i].x = ((data[6 * i + 2] & 0x0f) << 8) | data[6 * i + 3];
-        g_touch_data.coords[i].y = ((data[6 * i + 4] & 0x0f) << 8) | data[6 * i + 5];
+    if (point_num > MAX_TOUCH_POINTS) {
+        point_num = MAX_TOUCH_POINTS;
+    }
+
+    g_touch_data.touch_num = point_num;
+    for (uint8_t i = 0; i < point_num; i++) {
+        rotate_point(points[i].x, points[i].y, &g_touch_data.coords[i]);
     }
 }
 
@@ -46,39 +67,33 @@ bool bsp_touch_get_coordinates(touch_data_t *touch_data)
         return false;
     }
 
-    touch_data->touch_num = g_touch_data.touch_num;
-    for (int i = 0; i < g_touch_data.touch_num; i++) {
-        switch (g_rotation) {
-        case 1:
-            touch_data->coords[i].y = g_height - 1 - g_touch_data.coords[i].x;
-            touch_data->coords[i].x = g_touch_data.coords[i].y;
-            break;
-        case 2:
-            touch_data->coords[i].x = g_width - 1 - g_touch_data.coords[i].x;
-            touch_data->coords[i].y = g_height - 1 - g_touch_data.coords[i].y;
-            break;
-        case 3:
-            touch_data->coords[i].y = g_touch_data.coords[i].x;
-            touch_data->coords[i].x = g_width - 1 - g_touch_data.coords[i].y;
-            break;
-        default:
-            touch_data->coords[i].x = g_touch_data.coords[i].x;
-            touch_data->coords[i].y = g_touch_data.coords[i].y;
-            break;
-        }
-    }
+    *touch_data = g_touch_data;
     return true;
 }
 
 void bsp_touch_init(i2c_master_bus_handle_t bus_handle, uint16_t width, uint16_t height, uint16_t rotation)
 {
+    esp_lcd_panel_io_handle_t touch_io_handle = NULL;
+    esp_lcd_panel_io_i2c_config_t touch_io_config = {};
+    touch_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_FT6336_ADDRESS;
+    touch_io_config.control_phase_bytes = 1;
+    touch_io_config.dc_bit_offset = 0;
+    touch_io_config.lcd_cmd_bits = 8;
+    touch_io_config.flags.disable_control_phase = 1;
+    touch_io_config.scl_speed_hz = 400 * 1000;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(bus_handle, &touch_io_config, &touch_io_handle));
+
+    esp_lcd_touch_config_t tp_cfg = {};
+    tp_cfg.x_max = width;
+    tp_cfg.y_max = height;
+    tp_cfg.rst_gpio_num = GPIO_NUM_NC;
+    tp_cfg.int_gpio_num = GPIO_NUM_NC;
+    tp_cfg.flags.swap_xy = 0;
+    tp_cfg.flags.mirror_x = 0;
+    tp_cfg.flags.mirror_y = 0;
+    ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_ft6336(touch_io_handle, &tp_cfg, &g_touch_handle));
+
     g_rotation = rotation;
     g_width = width;
     g_height = height;
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = I2C_AXS15231B_ADDRESS,
-        .scl_speed_hz = 400000,
-    };
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
 }

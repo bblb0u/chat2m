@@ -7,7 +7,7 @@
 #include "driver/i2c_master.h"
 
 #define MAX_TOUCH_POINTS 2
-#define I2C_AXS15231B_ADDRESS 0x3B
+#define I2C_FT6336_ADDRESS 0x38
 
 typedef struct {
     uint16_t x;

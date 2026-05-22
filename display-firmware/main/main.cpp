@@ -15,9 +15,10 @@
 #define EXAMPLE_LCD_H_RES 320
 #define EXAMPLE_LCD_V_RES 480
 #define LCD_BUFFER_PIXELS (EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES)
-#define LCD_BUFFER_BYTES (LCD_BUFFER_PIXELS * sizeof(uint16_t))
+#define LCD_TRANSFER_PIXELS (LCD_BUFFER_PIXELS / 10)
+#define LCD_TRANSFER_BYTES (LCD_TRANSFER_PIXELS * sizeof(uint16_t))
 
-#define BOOT_PATTERN_MS 3000
+#define BOOT_PATTERN_MS 2000
 #define BOOT_PATTERN_LINES 32
 #define DISPLAY_LINE_SIZE 512
 
@@ -137,7 +138,7 @@ void lv_port_init(void)
     disp_cfg.sw_rotate = EXAMPLE_DISPLAY_ROTATION;
     disp_cfg.hres = EXAMPLE_LCD_H_RES;
     disp_cfg.vres = EXAMPLE_LCD_V_RES;
-    disp_cfg.trans_size = LCD_BUFFER_PIXELS / 10;
+    disp_cfg.trans_size = LCD_TRANSFER_PIXELS;
     disp_cfg.draw_wait_cb = NULL;
     disp_cfg.flags.buff_dma = false;
     disp_cfg.flags.buff_spiram = true;
@@ -374,7 +375,7 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(bsp_axp2101_init(i2c_bus_handle));
     io_expander_init(i2c_bus_handle);
-    bsp_display_init(&io_handle, &panel_handle, LCD_BUFFER_BYTES);
+    bsp_display_init(&io_handle, &panel_handle, LCD_TRANSFER_BYTES);
     bsp_touch_init(i2c_bus_handle, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, 0);
     bsp_display_brightness_init();
     bsp_display_set_brightness(100);

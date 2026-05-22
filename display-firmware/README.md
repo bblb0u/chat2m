@@ -1,6 +1,6 @@
 # Chat2M Display Firmware
 
-ESP-IDF firmware for the Waveshare ESP32-S3-Touch-LCD-3.5B status display.
+ESP-IDF firmware for the Waveshare ESP32-S3-Touch-LCD-3.5 status display.
 
 The firmware initializes the board PMU, LCD, touch controller, backlight, and LVGL UI. It reads newline-delimited JSON status updates from the USB Serial/JTAG console:
 
@@ -25,6 +25,6 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash
 ```
 
-Use ESP-IDF 5.5.x for this board. The Waveshare examples require ESP-IDF 5.4.0 or newer, and this firmware has been verified with ESP-IDF 5.5.4.
+Use ESP-IDF 5.5.x for this board. The Waveshare examples require ESP-IDF 5.4.0 or newer, and this firmware has been verified with ESP-IDF 5.5.4. This board uses an ST7796 LCD controller and FT6336 touch controller.
 
 The boot sequence shows red, green, blue, and white bars for a few seconds before the Chat2M status UI starts. That makes it easier to distinguish a panel data-path issue from a voice-agent status issue.
