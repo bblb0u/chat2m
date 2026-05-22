@@ -9,3 +9,7 @@ venv
 ollama-data
 models
 tools
+vendor
+display-firmware/build
+display-firmware/managed_components
+display-firmware/sdkconfig
