@@ -20,6 +20,8 @@ DISPLAY_SERIAL_CANDIDATES = tuple(
 )
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 DISPLAY_SYNC_SECONDS = env_float("DISPLAY_SYNC_SECONDS")
+DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
+STATUS_WAIT_MAX_TIMEOUT_SECONDS = env_float("STATUS_WAIT_MAX_TIMEOUT_SECONDS")
 STATUS_HOST = os.getenv("STATUS_HOST", "0.0.0.0")
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8091"))
 
@@ -81,9 +83,9 @@ def parse_timeout(value: str | None) -> float | None:
     if value is None:
         return None
     try:
-        return min(max(float(value), 0.0), 86400.0)
+        return min(max(float(value), 0.0), STATUS_WAIT_MAX_TIMEOUT_SECONDS)
     except ValueError:
-        return 3600.0
+        return STATUS_WAIT_MAX_TIMEOUT_SECONDS
 
 
 class StatusHandler(BaseHTTPRequestHandler):
@@ -145,7 +147,7 @@ class StatusHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             state = str(payload["state"])[:24]
-            text = str(payload.get("text", ""))[:80]
+            text = str(payload.get("text", ""))[:DISPLAY_TEXT_MAX_CHARS]
         except Exception:
             self._send_json(400, {"error": "invalid state payload"})
             return

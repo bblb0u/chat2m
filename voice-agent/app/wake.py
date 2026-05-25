@@ -14,6 +14,7 @@ import sounddevice as sd
 from app.agent import (
     INPUT_CHANNELS,
     INPUT_DEVICE,
+    CHUNK_SECONDS,
     KWS_MODEL_DIR,
     SAMPLE_RATE,
     create_kws,
@@ -31,6 +32,7 @@ STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
 STATUS_HEALTH_URL = os.getenv("STATUS_HEALTH_URL", STATUS_URL.rsplit("/", 1)[0] + "/health")
 STATUS_WAIT_URL = os.getenv("STATUS_WAIT_URL", STATUS_URL.rsplit("/", 1)[0] + "/wait")
 SPEECH_WAIT_LOG_SECONDS = env_float("SPEECH_WAIT_LOG_SECONDS")
+SPEECH_WAIT_POLL_SECONDS = env_float("SPEECH_WAIT_POLL_SECONDS")
 WAKE_HEALTH_HOST = os.getenv("WAKE_HEALTH_HOST", "127.0.0.1")
 WAKE_HEALTH_PORT = int(os.getenv("WAKE_HEALTH_PORT", "8092"))
 ready_event = threading.Event()
@@ -97,7 +99,7 @@ def wait_for_status() -> dict[str, object]:
         if status is not None:
             return status
         log(f"waiting for status service: {STATUS_HEALTH_URL}")
-        time.sleep(1)
+        time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
 def trigger_speech() -> int | None:
@@ -144,7 +146,7 @@ def wait_for_status_change(start_non_idle_seq: int | None) -> int | None:
                 log(f"speech session state observed: {state}")
                 return non_idle_seq
 
-        time.sleep(1)
+        time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
 def wait_for_status_idle(start_non_idle_seq: int | None) -> None:
@@ -165,7 +167,7 @@ def wait_for_status_idle(start_non_idle_seq: int | None) -> None:
                 log(f"speech session finished with state: {state}")
                 return
 
-        time.sleep(1)
+        time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
 def status_is_busy(status: dict[str, object] | None) -> bool:
@@ -193,7 +195,7 @@ def wait_for_speech() -> None:
         if now - last_log >= SPEECH_WAIT_LOG_SECONDS:
             log(f"waiting for speech service: {SPEECH_HEALTH_URL}")
             last_log = now
-        time.sleep(2)
+        time.sleep(SPEECH_WAIT_POLL_SECONDS)
 
 
 def main() -> None:
@@ -203,7 +205,7 @@ def main() -> None:
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
     kws = create_kws()
-    chunk = int(0.1 * SAMPLE_RATE)
+    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     set_state("idle")
     ready_event.set()
 

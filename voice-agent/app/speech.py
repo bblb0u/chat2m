@@ -14,7 +14,10 @@ import sounddevice as sd
 
 from app.agent import (
     ASR_MODEL_DIR,
+    CHUNK_SECONDS,
     DISPLAY_SERIAL_BAUD,
+    DISPLAY_SERIAL_RETRY_SECONDS,
+    DISPLAY_TEXT_MAX_CHARS,
     GATEWAY_URL,
     INPUT_CHANNELS,
     INPUT_DEVICE,
@@ -59,10 +62,10 @@ class StatusClient(DisplayClient):
             return
         try:
             with httpx.Client(timeout=2.0) as client:
-                client.post(self.url, json={"state": state, "text": text[:80]}).raise_for_status()
+                client.post(self.url, json={"state": state, "text": text[:DISPLAY_TEXT_MAX_CHARS]}).raise_for_status()
         except Exception as exc:
             log(f"status forward failed: {exc}")
-            self._disabled_until = time.monotonic() + 2.0
+            self._disabled_until = time.monotonic() + DISPLAY_SERIAL_RETRY_SECONDS
 
 
 class WakeHandler(BaseHTTPRequestHandler):
@@ -132,7 +135,7 @@ def run_session_thread(recognizer, voice, tts_config, display: StatusClient, bee
 
 def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path) -> None:
     input_device = select_input_device(INPUT_DEVICE)
-    chunk = int(0.1 * SAMPLE_RATE)
+    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     with sd.InputStream(
         channels=INPUT_CHANNELS,
         dtype="float32",

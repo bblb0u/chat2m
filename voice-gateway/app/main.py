@@ -61,15 +61,30 @@ def env_int(key: str) -> int:
         raise RuntimeError(f"{key} must be an integer in runtime.env") from None
 
 
+def env_csv(key: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in env_value(key).split(",") if item.strip())
+
+
 def normalize_provider(value: str) -> str:
     return value.strip().lower().replace("-", "_")
 
 
+def normalize_api_path(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise RuntimeError("API path values in runtime.env must not be empty")
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    return normalized.rstrip("/") or "/"
+
+
 LLM_PROVIDER = normalize_provider(env_value("LLM_PROVIDER"))
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").strip().rstrip("/")
+OLLAMA_BASE_URL = env_value("OLLAMA_BASE_URL").rstrip("/")
 OLLAMA_MODEL = env_value("OLLAMA_MODEL", allow_empty=True)
 LLM_MODEL = env_value("LLM_MODEL", allow_empty=True)
 LLM_BASE_URL = env_value("LLM_BASE_URL", allow_empty=True).rstrip("/")
+LLM_CHAT_COMPLETIONS_PATH = normalize_api_path(env_value("LLM_CHAT_COMPLETIONS_PATH"))
+LLM_REACHABILITY_PATH = normalize_api_path(env_value("LLM_REACHABILITY_PATH"))
 LLM_TEMPERATURE = env_float("LLM_TEMPERATURE")
 LLM_TOP_P = env_float("LLM_TOP_P")
 LLM_MAX_TOKENS = env_int("LLM_MAX_TOKENS")
@@ -80,6 +95,8 @@ LLM_REACHABILITY_INTERVAL_SECONDS = env_float("LLM_REACHABILITY_INTERVAL_SECONDS
 LLM_REACHABILITY_TIMEOUT_SECONDS = env_float("LLM_REACHABILITY_TIMEOUT_SECONDS")
 OLLAMA_NUM_CTX = env_int("OLLAMA_NUM_CTX")
 OLLAMA_NUM_THREAD = env_int("OLLAMA_NUM_THREAD")
+EMPTY_ANSWER_RESPONSE = env_value("EMPTY_ANSWER_RESPONSE")
+WAKE_WORDS = env_csv("WAKE_WORDS")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))
 SAFETY_PATH = Path(os.getenv("SAFETY_PATH", "/app/config/safety.yaml"))
 
@@ -117,7 +134,15 @@ app = FastAPI(title="Chat2M Voice Gateway", version="0.1.0")
 
 
 MATCH_REMOVE_PATTERN = re.compile(r"[\s，。！？、,.!?;；:：\"'“”‘’（）()【】\[\]{}<>《》]")
-MATCH_PREFIX_PATTERN = re.compile(r"^(请问|那个|嗯|啊|你好|您好|小江|嗨小江|嘿小江)+")
+
+
+def build_match_prefix_pattern() -> re.Pattern[str]:
+    prefixes = ("请问", "那个", "嗯", "啊", "你好", "您好", *WAKE_WORDS)
+    escaped = "|".join(re.escape(prefix) for prefix in sorted(set(prefixes), key=len, reverse=True) if prefix)
+    return re.compile(rf"^({escaped})+") if escaped else re.compile(r"a^")
+
+
+MATCH_PREFIX_PATTERN = build_match_prefix_pattern()
 
 
 def load_yaml(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -212,7 +237,7 @@ def chat_messages(message: str) -> list[dict[str, str]]:
 
 def remote_base_url() -> str:
     base_url = LLM_BASE_URL
-    suffix = "/chat/completions"
+    suffix = LLM_CHAT_COMPLETIONS_PATH
     if base_url.endswith(suffix):
         base_url = base_url[: -len(suffix)]
     return base_url
@@ -316,7 +341,7 @@ async def call_remote_llm(message: str) -> str:
         payload[LLM_MAX_TOKENS_FIELD] = LLM_MAX_TOKENS
     timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(f"{base_url}/chat/completions", headers=remote_headers(), json=payload)
+        response = await client.post(f"{base_url}{LLM_CHAT_COMPLETIONS_PATH}", headers=remote_headers(), json=payload)
         response.raise_for_status()
     return strip_thinking(extract_chat_completion_answer(response.json()))
 
@@ -372,7 +397,7 @@ async def probe_remote_health() -> LLMReachability:
 
     try:
         async with httpx.AsyncClient(timeout=LLM_REACHABILITY_TIMEOUT_SECONDS) as client:
-            response = await client.get(f"{base_url}/models", headers=remote_headers())
+            response = await client.get(f"{base_url}{LLM_REACHABILITY_PATH}", headers=remote_headers())
             status = "ok" if response.is_success else f"http_{response.status_code}"
             return LLMReachability(online=response.is_success, status=status, checked_at=time.time())
     except httpx.HTTPError:
@@ -528,7 +553,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         route = result.route
 
     return ChatResponse(
-        answer=answer or "我暂时没有生成有效回答。",
+        answer=answer or EMPTY_ANSWER_RESPONSE,
         route=route,
         model=result.model,
         latency_ms=int((time.perf_counter() - started_at) * 1000),

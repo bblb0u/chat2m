@@ -133,7 +133,7 @@ PY
 }
 
 kws_runtime_ok() {
-  python3 - "$KWS_MODEL" <<'PY'
+  python3 - "$KWS_MODEL" "$WAKE_WORDS" <<'PY'
 import subprocess
 import sys
 import tempfile
@@ -142,12 +142,17 @@ from pathlib import Path
 import sherpa_onnx
 
 model_dir = sys.argv[1]
+wake_words = [word.strip() for word in sys.argv[2].split(",") if word.strip()]
+if not wake_words:
+    print("WAKE_WORDS must contain at least one wake word", file=sys.stderr)
+    sys.exit(1)
+
 try:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         raw_keywords = tmp_path / "keywords_raw.txt"
         keywords = tmp_path / "keywords.txt"
-        raw_keywords.write_text("嗨小江 @嗨小江\n", encoding="utf-8")
+        raw_keywords.write_text("".join(f"{word} @{word}\n" for word in wake_words), encoding="utf-8")
         subprocess.run(
             [
                 "sherpa-onnx-cli",
@@ -180,11 +185,12 @@ PY
 }
 
 asr_runtime_ok() {
-  python3 - "$ASR_MODEL" <<'PY'
+  python3 - "$ASR_MODEL" "$AUDIO_SAMPLE_RATE" <<'PY'
 import sys
 import sherpa_onnx
 
 model_dir = sys.argv[1]
+sample_rate = int(sys.argv[2])
 try:
     sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=f"{model_dir}/tokens.txt",
@@ -192,7 +198,7 @@ try:
         decoder=f"{model_dir}/decoder-epoch-99-avg-1.int8.onnx",
         joiner=f"{model_dir}/joiner-epoch-99-avg-1.int8.onnx",
         num_threads=1,
-        sample_rate=16000,
+        sample_rate=sample_rate,
         feature_dim=80,
         enable_endpoint_detection=True,
         provider="cpu",
@@ -396,11 +402,13 @@ VOICE_ROLE="${VOICE_ROLE:-}"
 : "${VOICE_PIPER_MODEL_NAME:?VOICE_PIPER_MODEL_NAME must be set in runtime.env}"
 : "${VOICE_PIPER_MODEL_URL:?VOICE_PIPER_MODEL_URL must be set in runtime.env}"
 : "${VOICE_PIPER_CONFIG_URL:?VOICE_PIPER_CONFIG_URL must be set in runtime.env}"
+: "${WAKE_WORDS:?WAKE_WORDS must be set in runtime.env}"
+: "${AUDIO_SAMPLE_RATE:?AUDIO_SAMPLE_RATE must be set in runtime.env}"
 KWS_MODEL="$MODELS_DIR/$VOICE_KWS_MODEL_NAME"
 ASR_MODEL="$MODELS_DIR/$VOICE_ASR_MODEL_NAME"
 PIPER_DIR="$MODELS_DIR/piper/$VOICE_PIPER_MODEL_NAME"
 VOICE_MODEL_SET="${VOICE_MODEL_SET:-$(default_voice_model_set)}"
-LOCK_WAIT_LOG_SECONDS="${LOCK_WAIT_LOG_SECONDS:-30}"
+: "${LOCK_WAIT_LOG_SECONDS:?LOCK_WAIT_LOG_SECONDS must be set in runtime.env}"
 
 if [ "$VOICE_MODELS_REQUIRED" != "1" ]; then
   exec "$@"

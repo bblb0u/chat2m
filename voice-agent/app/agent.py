@@ -92,10 +92,14 @@ DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
 OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
 SAMPLE_RATE = env_int("AUDIO_SAMPLE_RATE")
+CHUNK_SECONDS = env_float("AUDIO_CHUNK_SECONDS")
 INPUT_CHANNELS = env_int("AUDIO_INPUT_CHANNELS")
 INPUT_CHANNEL_INDEX = env_int("AUDIO_INPUT_CHANNEL_INDEX")
 KWS_THREADS = env_int("KWS_THREADS")
 ASR_THREADS = env_int("ASR_THREADS")
+GATEWAY_REQUEST_TIMEOUT_SECONDS = env_float("GATEWAY_REQUEST_TIMEOUT_SECONDS")
+GATEWAY_UNAVAILABLE_RESPONSE = env_value("GATEWAY_UNAVAILABLE_RESPONSE")
+ASR_ERROR_RESPONSE = env_value("ASR_ERROR_RESPONSE")
 COMMAND_TIMEOUT_SECONDS = env_float("COMMAND_TIMEOUT_SECONDS")
 COMMAND_MIN_SECONDS = env_float("COMMAND_MIN_SECONDS")
 COMMAND_LEADING_SILENCE_SECONDS = env_float("COMMAND_LEADING_SILENCE_SECONDS")
@@ -111,6 +115,9 @@ PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
 PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
 PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
 PIPER_VOLUME = env_float("PIPER_VOLUME")
+TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
+DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
+DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 NO_COMMAND_RESPONSE = env_value("NO_COMMAND_RESPONSE")
 WAKE_RESPONSE = env_value("WAKE_RESPONSE")
 SESSION_IDLE_RESPONSE = env_value("SESSION_IDLE_RESPONSE", allow_empty=True)
@@ -177,7 +184,7 @@ class DisplayClient:
             return
         payload = {
             "state": state,
-            "text": text[:80],
+            "text": text[:DISPLAY_TEXT_MAX_CHARS],
             "ts": int(time.time()),
         }
         line = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
@@ -195,7 +202,7 @@ class DisplayClient:
             except serial.SerialException as exc:
                 log(f"display serial write failed: {exc}")
                 self._close_locked()
-                self._disabled_until = time.monotonic() + 5.0
+                self._disabled_until = time.monotonic() + DISPLAY_SERIAL_RETRY_SECONDS
 
 
 def wake_words_display() -> str:
@@ -362,7 +369,7 @@ def speak(text: str, voice: PiperVoice, config: SynthesisConfig) -> None:
                 player.stdin.write(audio_chunk_bytes(chunk))
         finally:
             player.stdin.close()
-        return_code = player.wait(timeout=30)
+        return_code = player.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
     if return_code != 0:
         raise RuntimeError(f"aplay exited with status {return_code}")
 
@@ -386,7 +393,7 @@ def speak_pausing_input(
 
 
 def drain_audio(audio: sd.InputStream, seconds: float) -> None:
-    chunk = int(0.1 * SAMPLE_RATE)
+    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         audio.read(chunk)
@@ -413,7 +420,7 @@ def listen_command(
     play_ready_beep: bool = True,
 ) -> str:
     stream = recognizer.create_stream()
-    chunk = int(0.1 * SAMPLE_RATE)
+    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     last_text = ""
     speech_started = False
     max_rms = 0.0
@@ -470,7 +477,8 @@ class OnlineModelUnavailable(RuntimeError):
 
 def refresh_llm_route_cache() -> None:
     try:
-        with httpx.Client(timeout=1.0) as client:
+        timeout = min(max(LLM_ROUTE_CACHE_INTERVAL_SECONDS * 0.5, 0.2), 1.0)
+        with httpx.Client(timeout=timeout) as client:
             response = client.get(GATEWAY_REACHABILITY_URL)
             response.raise_for_status()
             data: dict[str, Any] = response.json()
@@ -517,7 +525,7 @@ def ask_gateway(text: str, llm_route: str | None = None) -> str:
     payload: dict[str, str] = {"message": text}
     if llm_route:
         payload["llm_route"] = llm_route
-    with httpx.Client(timeout=60.0) as client:
+    with httpx.Client(timeout=GATEWAY_REQUEST_TIMEOUT_SECONDS) as client:
         response = client.post(GATEWAY_URL, json=payload)
         try:
             response.raise_for_status()
@@ -561,7 +569,7 @@ def handle_conversation_turn(
     except Exception as exc:
         log(f"gateway request failed: {exc}")
         display.set_state("error", "gateway unavailable")
-        speak_pausing_input(audio, "对话服务暂时不可用", voice, tts_config, display)
+        speak_pausing_input(audio, GATEWAY_UNAVAILABLE_RESPONSE, voice, tts_config, display)
         return True
 
     log(f"answer: {answer}")
@@ -590,7 +598,7 @@ def handle_wake(
         except Exception as exc:
             log(f"asr failed in conversation: {exc}")
             display.set_state("error", "asr failed")
-            speak_pausing_input(audio, "语音识别出错", voice, tts_config, display)
+            speak_pausing_input(audio, ASR_ERROR_RESPONSE, voice, tts_config, display)
             return
 
         if not command:
@@ -628,7 +636,7 @@ def main() -> None:
     log("loading low-power wake-word model only")
     kws = create_kws()
     stream = kws.create_stream()
-    chunk = int(0.1 * SAMPLE_RATE)
+    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     log("preloading ASR model")
     recognizer = create_asr()
     log("ASR model ready")
