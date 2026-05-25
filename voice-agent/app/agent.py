@@ -142,8 +142,12 @@ class DisplayClient:
                 if self._serial is None or not self._serial.is_open:
                     self._serial = serial.Serial(self.port, self.baud, timeout=0, write_timeout=1)
                     time.sleep(0.1)
-                self._serial.write(line)
+                written = self._serial.write(line)
                 self._serial.flush()
+                if written != len(line):
+                    raise serial.SerialTimeoutException(
+                        f"display serial partial write: {written}/{len(line)} bytes"
+                    )
             except serial.SerialException as exc:
                 log(f"display serial write failed: {exc}")
                 self._close_locked()

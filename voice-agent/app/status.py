@@ -22,6 +22,7 @@ DISPLAY_SERIAL_CANDIDATES = tuple(
     if candidate.strip()
 )
 DISPLAY_SERIAL_BAUD = int(os.getenv("DISPLAY_SERIAL_BAUD", "115200"))
+DISPLAY_SYNC_SECONDS = float(os.getenv("DISPLAY_SYNC_SECONDS", "1.0"))
 STATUS_HOST = os.getenv("STATUS_HOST", "0.0.0.0")
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8091"))
 
@@ -59,6 +60,15 @@ def set_state(state: str, text: str = "") -> None:
         state_lock.notify_all()
     display.set_state(state, text)
     log(f"display state: {state}")
+
+
+def sync_display_state() -> None:
+    while True:
+        time.sleep(DISPLAY_SYNC_SECONDS)
+        with state_lock:
+            state = str(last_state["state"])
+            text = str(last_state["text"])
+        display.set_state(state, text)
 
 
 def parse_int(value: str | None) -> int | None:
@@ -150,6 +160,9 @@ class StatusHandler(BaseHTTPRequestHandler):
 def main() -> None:
     log(f"display serial: {display_port or 'disabled'}")
     set_state("idle")
+    if display.enabled and DISPLAY_SYNC_SECONDS > 0:
+        threading.Thread(target=sync_display_state, daemon=True).start()
+        log(f"display sync interval: {DISPLAY_SYNC_SECONDS:g}s")
     server = ThreadingHTTPServer((STATUS_HOST, STATUS_PORT), StatusHandler)
     log(f"status forwarder listening on {STATUS_HOST}:{STATUS_PORT}")
     try:
