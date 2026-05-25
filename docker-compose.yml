@@ -75,12 +75,6 @@ services:
         condition: service_healthy
       chat2m-status:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
 
   chat2m-wake:
     image: bblb0u/chat2m-wake:latest
@@ -97,4 +91,4 @@ services:
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2m-speech:
-        condition: service_healthy
+        condition: service_started

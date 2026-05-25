@@ -21,9 +21,11 @@ from app.agent import (
 
 
 SPEECH_WAKE_URL = os.getenv("SPEECH_WAKE_URL", "http://chat2m-speech:8090/wake")
+SPEECH_HEALTH_URL = os.getenv("SPEECH_HEALTH_URL", SPEECH_WAKE_URL.rsplit("/", 1)[0] + "/health")
 STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
 WAKE_COOLDOWN_SECONDS = float(os.getenv("WAKE_COOLDOWN_SECONDS", "1.0"))
 MIC_RELEASE_SECONDS = float(os.getenv("MIC_RELEASE_SECONDS", "0.25"))
+SPEECH_WAIT_LOG_SECONDS = float(os.getenv("SPEECH_WAIT_LOG_SECONDS", "30"))
 
 
 def post_json(url: str, payload: dict[str, str], timeout: float = 2.0) -> bool:
@@ -46,7 +48,29 @@ def trigger_speech() -> bool:
     return post_json(SPEECH_WAKE_URL, {"event": "wake"}, timeout=180.0)
 
 
+def wait_for_speech() -> None:
+    last_log = 0.0
+    set_state("waiting", "speech")
+    while True:
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                response = client.get(SPEECH_HEALTH_URL)
+                if response.is_success:
+                    log("speech service is online")
+                    set_state("idle")
+                    return
+        except Exception:
+            pass
+
+        now = time.monotonic()
+        if now - last_log >= SPEECH_WAIT_LOG_SECONDS:
+            log(f"waiting for speech service: {SPEECH_HEALTH_URL}")
+            last_log = now
+        time.sleep(2)
+
+
 def main() -> None:
+    wait_for_speech()
     input_device = select_input_device(INPUT_DEVICE)
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
