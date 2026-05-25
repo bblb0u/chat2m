@@ -31,7 +31,6 @@ def load_runtime_env() -> None:
 
 load_runtime_env()
 
-FINAL_ANSWER_PROMPT = "只输出给用户听的最终答案，不要分析题目，不要复述用户问题，不要解释你的输出规则。"
 LOCAL_LLM_PROVIDERS = {"ollama", "local"}
 
 
@@ -221,14 +220,7 @@ REMOTE_REACHABILITY_TASK: asyncio.Task[None] | None = None
 
 
 def chat_messages(message: str) -> list[dict[str, str]]:
-    system_prompt = "\n".join(
-        item
-        for item in (
-            str(profile().get("system_prompt", "")).strip(),
-            FINAL_ANSWER_PROMPT,
-        )
-        if item
-    )
+    system_prompt = str(profile().get("system_prompt", "")).strip()
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": message},
