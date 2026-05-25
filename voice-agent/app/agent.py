@@ -49,9 +49,9 @@ KWS_MODEL_DIR = Path(
 ASR_MODEL_DIR = Path(
     os.getenv("ASR_MODEL_DIR", str(MODELS_DIR / VOICE_ASR_MODEL_NAME))
 )
-KEYWORDS_RAW = Path(os.getenv("KEYWORDS_RAW", "/app/config/wake_keywords_raw.txt"))
-GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_keywords.txt"
-GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_keywords_raw.txt"
+KEYWORDS_RAW = Path(os.getenv("KEYWORDS_RAW", str(MODELS_DIR / "wake_words_raw.txt")))
+GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
+GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
 PRETOKENIZED_KEYWORDS_FILE = os.getenv("KEYWORDS_FILE", "")
 WAKE_WORDS_ENV = os.getenv("WAKE_WORDS", "")
 WAKE_WORDS = tuple(
