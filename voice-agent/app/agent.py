@@ -22,12 +22,32 @@ import sherpa_onnx
 import sounddevice as sd
 
 
+def load_runtime_env() -> None:
+    path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key) or key in os.environ:
+            continue
+        os.environ[key] = value.strip()
+
+
+load_runtime_env()
+
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
+VOICE_KWS_MODEL_NAME = os.getenv("VOICE_KWS_MODEL_NAME", "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20")
+VOICE_ASR_MODEL_NAME = os.getenv("VOICE_ASR_MODEL_NAME", "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20")
+VOICE_PIPER_MODEL_NAME = os.getenv("VOICE_PIPER_MODEL_NAME", "zh_CN-huayan-medium")
 KWS_MODEL_DIR = Path(
-    os.getenv("KWS_MODEL_DIR", str(MODELS_DIR / "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"))
+    os.getenv("KWS_MODEL_DIR", str(MODELS_DIR / VOICE_KWS_MODEL_NAME))
 )
 ASR_MODEL_DIR = Path(
-    os.getenv("ASR_MODEL_DIR", str(MODELS_DIR / "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"))
+    os.getenv("ASR_MODEL_DIR", str(MODELS_DIR / VOICE_ASR_MODEL_NAME))
 )
 KEYWORDS_RAW = Path(os.getenv("KEYWORDS_RAW", "/app/config/wake_keywords_raw.txt"))
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_keywords.txt"
@@ -58,7 +78,7 @@ PRE_BEEP_DRAIN_SECONDS = float(os.getenv("PRE_BEEP_DRAIN_SECONDS", "0.05"))
 POST_BEEP_DRAIN_SECONDS = float(os.getenv("POST_BEEP_DRAIN_SECONDS", "0.05"))
 POST_RESPONSE_DRAIN_SECONDS = float(os.getenv("POST_RESPONSE_DRAIN_SECONDS", "0.5"))
 SPEECH_RMS_THRESHOLD = float(os.getenv("SPEECH_RMS_THRESHOLD", "0.006"))
-PIPER_MODEL = Path(os.getenv("PIPER_MODEL", str(MODELS_DIR / "piper/zh_CN-huayan-medium/model.onnx")))
+PIPER_MODEL = Path(os.getenv("PIPER_MODEL", str(MODELS_DIR / "piper" / VOICE_PIPER_MODEL_NAME / "model.onnx")))
 PIPER_CONFIG = Path(os.getenv("PIPER_CONFIG", str(PIPER_MODEL) + ".json"))
 PIPER_SPEAKER = int(os.getenv("PIPER_SPEAKER", "0"))
 PIPER_LENGTH_SCALE = float(os.getenv("PIPER_LENGTH_SCALE", "0.9"))

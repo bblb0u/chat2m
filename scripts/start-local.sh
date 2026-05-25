@@ -31,6 +31,5 @@ cd "$ROOT_DIR"
 docker compose up -d ollama chat2m-gateway
 
 echo "Chat2M local chat is running."
-echo "API:    http://localhost:8080/chat"
-echo "Health: http://localhost:8080/health"
-echo "Model:  qwen3:4b-instruct"
+echo "Gateway is available inside the compose network at http://chat2m-gateway:8080"
+echo "Model:  configured in data/config/runtime.env"

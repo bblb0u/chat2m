@@ -20,20 +20,7 @@ docker compose up -d
 Jetson 上会默认用 Docker 的 `nvidia` runtime 启动 Ollama，并设置 `JETSON_JETPACK=5` 与 `cuda_jetpack5` backend。
 `ollama` 容器启动时会在后台检查默认模型 `qwen3:4b-instruct`，可用则复用，不可用会删除后重新拉取。
 
-启动后接口：
-
-```text
-http://localhost:8080/chat
-```
-
-命令行测试：
-
-```bash
-curl -s http://localhost:8080/health
-curl -s http://localhost:8080/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"你叫什么？"}'
-```
+服务默认只在 Docker Compose 内部网络通信，不向宿主机暴露端口。
 
 停止服务：
 
@@ -103,7 +90,7 @@ docker compose up -d
 docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 ```
 
-默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口或 Piper 语速，直接改 `docker-compose.yml` 里的 `chat2m-wake`、`chat2m-speech`、`chat2m-status` 配置。
+默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 Piper 语速，改 `data/config/runtime.env`。
 
 首次启动会自动检查 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
 
@@ -115,7 +102,7 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 - `data/models/`：唤醒词、ASR、TTS 模型。
 - `data/ollama/`：Ollama 模型、manifest 和本地运行数据。
 
-换机器时迁移 `/opt/chat2m/data` 即可。`/dev`、`/dev/snd`、`/etc/asound.conf` 是宿主机设备和系统音频配置，不放进项目数据目录。
+换机器时迁移 `/opt/chat2m/data` 即可。语音模型按 `runtime.env` 里的模型名放到 `data/models/` 的独立子目录；更换模型名会使用新目录，不会覆盖旧模型。`/dev`、`/dev/snd`、`/etc/asound.conf` 是宿主机设备和系统音频配置，不放进项目数据目录。
 
 停止：
 

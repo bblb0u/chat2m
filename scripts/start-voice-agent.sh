@@ -31,7 +31,7 @@ cd "$ROOT_DIR"
 docker compose up -d
 
 echo "Chat2M voice services are running."
-echo "Wake words: 嗨小江,嘿小江,小江"
-echo "Model: qwen3:4b-instruct"
-echo "Display serial: auto"
+echo "Wake words: configured in data/config/runtime.env"
+echo "Model: configured in data/config/runtime.env"
+echo "Display serial: configured in data/config/runtime.env"
 echo "Logs: docker compose logs -f chat2m-wake chat2m-speech chat2m-status"

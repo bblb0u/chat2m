@@ -7,15 +7,13 @@ services:
     restart: unless-stopped
     runtime: nvidia
     environment:
-      OLLAMA_MODEL: qwen3:4b-instruct
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       OLLAMA_LLM_LIBRARY: cuda_jetpack5
       JETSON_JETPACK: "5"
       LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
-    ports:
-      - "11434:11434"
     volumes:
+      - ./data/config:/app/config
       - ./data/ollama:/root/.ollama
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -28,18 +26,17 @@ services:
     image: bblb0u/chat2m-gateway:latest
     container_name: chat2m-gateway
     restart: unless-stopped
-    environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen3:4b-instruct
-      PROFILE_PATH: /app/config/profile.yaml
-      SAFETY_PATH: /app/config/safety.yaml
-    ports:
-      - "8080:8080"
     volumes:
       - ./data/config:/app/config
     depends_on:
       ollama:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
 
   chat2m-status:
     image: bblb0u/chat2m-status:latest
@@ -53,10 +50,12 @@ services:
     environment:
       VOICE_MODELS_REQUIRED: "0"
       VOICE_ROLE: chat2m-status
-      DISPLAY_SERIAL_PORT: auto
-      DISPLAY_SERIAL_CANDIDATES: /dev/ttyACM0,/dev/ttyACM1,/dev/ttyUSB0,/dev/ttyUSB1,/host-dev/ttyACM0,/host-dev/ttyACM1,/host-dev/ttyUSB0,/host-dev/ttyUSB1
-      DISPLAY_SERIAL_BAUD: "115200"
-      STATUS_PORT: 8091
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
   chat2m-speech:
     image: bblb0u/chat2m-speech:latest
@@ -67,34 +66,21 @@ services:
     command: ["python3", "-m", "app.speech"]
     environment:
       VOICE_ROLE: chat2m-speech
-      AUDIO_INPUT_DEVICE: ReSpeaker
-      AUDIO_INPUT_CHANNELS: "1"
-      AUDIO_INPUT_CHANNEL_INDEX: "0"
-      AUDIO_OUTPUT_DEVICE: plughw:CARD=ArrayUAC10,DEV=0
-      GATEWAY_URL: http://chat2m-gateway:8080/chat
-      STATUS_URL: http://chat2m-status:8091/state
-      COMMAND_TIMEOUT_SECONDS: "10"
-      COMMAND_LEADING_SILENCE_SECONDS: "4"
-      SPEECH_RMS_THRESHOLD: "0.006"
-      PIPER_MODEL: /models/piper/zh_CN-huayan-medium/model.onnx
-      PIPER_CONFIG: /models/piper/zh_CN-huayan-medium/model.onnx.json
-      PIPER_SPEAKER: "0"
-      PIPER_LENGTH_SCALE: "0.9"
-      PIPER_VOLUME: "1.0"
-      WAKE_RESPONSE: 有什么可以帮助您的
-      SESSION_IDLE_RESPONSE: ""
-      SESSION_END_RESPONSE: 好的，我先待机
-      SESSION_END_PHRASES: 退出,结束,不用了,没事了,再见,拜拜,回到待机,退下,退下吧,你走吧,走吧,下去吧,可以了,先这样
-      MAX_SESSION_TURNS: "8"
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2m-gateway:
-        condition: service_started
+        condition: service_healthy
       chat2m-status:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   chat2m-wake:
     image: bblb0u/chat2m-wake:latest
@@ -105,20 +91,10 @@ services:
     command: ["python3", "-m", "app.wake"]
     environment:
       VOICE_ROLE: chat2m-wake
-      AUDIO_INPUT_DEVICE: ReSpeaker
-      AUDIO_INPUT_CHANNELS: "1"
-      AUDIO_INPUT_CHANNEL_INDEX: "0"
-      SPEECH_WAKE_URL: http://chat2m-speech:8090/wake
-      STATUS_URL: http://chat2m-status:8091/state
-      WAKE_WORDS: 嗨小江,嘿小江,小江
-      KWS_KEYWORDS_SCORE: "1.5"
-      KWS_KEYWORDS_THRESHOLD: "0.25"
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
       chat2m-speech:
-        condition: service_started
-      chat2m-status:
-        condition: service_started
+        condition: service_healthy

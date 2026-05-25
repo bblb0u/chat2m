@@ -4,10 +4,48 @@ set -eu
 MODELS_DIR=/models
 DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
-VOICE_MODELS_REQUIRED="${VOICE_MODELS_REQUIRED:-1}"
-KWS_MODEL="$MODELS_DIR/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
-ASR_MODEL="$MODELS_DIR/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
-PIPER_DIR="$MODELS_DIR/piper/zh_CN-huayan-medium"
+RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
+
+default_voice_model_set() {
+  case "$VOICE_ROLE" in
+    chat2m-wake) echo "kws" ;;
+    chat2m-speech) echo "asr,piper" ;;
+    *) echo "all" ;;
+  esac
+}
+
+model_selected() {
+  case ",$VOICE_MODEL_SET," in
+    *",all,"*|*",$1,"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+lock_key() {
+  printf '%s' "$VOICE_MODEL_SET" | tr -c 'A-Za-z0-9_.-' '-'
+}
+
+load_runtime_env() {
+  [ -f "$RUNTIME_CONFIG_PATH" ] || return
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*) continue ;;
+    esac
+
+    eval "is_set=\${$key+x}"
+    if [ -z "$is_set" ]; then
+      export "$key=$value"
+    fi
+  done < "$RUNTIME_CONFIG_PATH"
+}
 
 init_config() {
   if [ ! -d "$DEFAULT_CONFIG_DIR" ]; then
@@ -283,52 +321,76 @@ ensure_archive_model() {
 
 ensure_piper_model() {
   if piper_model_ok; then
-    echo "piper zh_CN-huayan-medium is ready"
+    echo "piper $VOICE_PIPER_MODEL_NAME is ready"
     return
   fi
 
-  echo "piper zh_CN-huayan-medium is missing or invalid; re-downloading"
+  echo "piper $VOICE_PIPER_MODEL_NAME is missing or invalid; re-downloading"
   rm -rf "$PIPER_DIR"
-  download_file \
-    "$PIPER_DIR/model.onnx" \
-    "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx"
-  download_file \
-    "$PIPER_DIR/model.onnx.json" \
-    "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
+  download_file "$PIPER_DIR/model.onnx" "$VOICE_PIPER_MODEL_URL"
+  download_file "$PIPER_DIR/model.onnx.json" "$VOICE_PIPER_CONFIG_URL"
 
-  echo "[models] validating piper zh_CN-huayan-medium"
+  echo "[models] validating piper $VOICE_PIPER_MODEL_NAME"
   if ! piper_model_ok; then
-    echo "piper zh_CN-huayan-medium is still invalid after download" >&2
+    echo "piper $VOICE_PIPER_MODEL_NAME is still invalid after download" >&2
     exit 1
   fi
 }
 
 init_config
+load_runtime_env
+
+VOICE_MODELS_REQUIRED="${VOICE_MODELS_REQUIRED:-1}"
+VOICE_ROLE="${VOICE_ROLE:-}"
+VOICE_KWS_MODEL_NAME="${VOICE_KWS_MODEL_NAME:-sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20}"
+VOICE_KWS_MODEL_URL="${VOICE_KWS_MODEL_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2}"
+VOICE_ASR_MODEL_NAME="${VOICE_ASR_MODEL_NAME:-sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20}"
+VOICE_ASR_MODEL_URL="${VOICE_ASR_MODEL_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2}"
+VOICE_PIPER_MODEL_NAME="${VOICE_PIPER_MODEL_NAME:-zh_CN-huayan-medium}"
+VOICE_PIPER_MODEL_URL="${VOICE_PIPER_MODEL_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx}"
+VOICE_PIPER_CONFIG_URL="${VOICE_PIPER_CONFIG_URL:-https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json}"
+KWS_MODEL="$MODELS_DIR/$VOICE_KWS_MODEL_NAME"
+ASR_MODEL="$MODELS_DIR/$VOICE_ASR_MODEL_NAME"
+PIPER_DIR="$MODELS_DIR/piper/$VOICE_PIPER_MODEL_NAME"
+VOICE_MODEL_SET="${VOICE_MODEL_SET:-$(default_voice_model_set)}"
+LOCK_WAIT_LOG_SECONDS="${LOCK_WAIT_LOG_SECONDS:-30}"
 
 if [ "$VOICE_MODELS_REQUIRED" != "1" ]; then
   exec "$@"
 fi
 
 mkdir -p "$MODELS_DIR"
-LOCK_DIR="$MODELS_DIR/.download.lock"
+LOCK_DIR="$MODELS_DIR/.download.$(lock_key).lock"
+lock_waited=0
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-  echo "[models] waiting for voice model download lock"
   sleep 2
+  lock_waited=$((lock_waited + 2))
+  if [ "$lock_waited" -eq 2 ]; then
+    echo "[models] waiting for voice model download lock: $VOICE_MODEL_SET"
+  elif [ "$LOCK_WAIT_LOG_SECONDS" -gt 0 ] && [ $((lock_waited % LOCK_WAIT_LOG_SECONDS)) -eq 0 ]; then
+    echo "[models] still waiting for voice model download lock: $VOICE_MODEL_SET (${lock_waited}s)"
+  fi
 done
-echo "[models] voice model download lock acquired"
+echo "[models] voice model download lock acquired: $VOICE_MODEL_SET"
 trap 'rmdir "$LOCK_DIR"' EXIT
 
-ensure_archive_model \
-  "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20" \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2" \
-  kws_model_ok
+if model_selected kws; then
+  ensure_archive_model \
+    "$VOICE_KWS_MODEL_NAME" \
+    "$VOICE_KWS_MODEL_URL" \
+    kws_model_ok
+fi
 
-ensure_archive_model \
-  "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20" \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
-  asr_model_ok
+if model_selected asr; then
+  ensure_archive_model \
+    "$VOICE_ASR_MODEL_NAME" \
+    "$VOICE_ASR_MODEL_URL" \
+    asr_model_ok
+fi
 
-ensure_piper_model
+if model_selected piper; then
+  ensure_piper_model
+fi
 
 trap - EXIT
 rmdir "$LOCK_DIR"

@@ -12,6 +12,23 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 
+def load_runtime_env() -> None:
+    path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key) or key in os.environ:
+            continue
+        os.environ[key] = value.strip()
+
+
+load_runtime_env()
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b-instruct")
 PROFILE_PATH = Path(os.getenv("PROFILE_PATH", "/app/config/profile.yaml"))

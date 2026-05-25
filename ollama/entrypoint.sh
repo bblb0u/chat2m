@@ -1,7 +1,48 @@
 #!/bin/sh
 set -eu
 
+DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
+CONFIG_DIR="${CONFIG_DIR:-/app/config}"
+RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
 MODEL="${OLLAMA_MODEL:-qwen3:4b-instruct}"
+
+init_config() {
+  if [ ! -d "$DEFAULT_CONFIG_DIR" ]; then
+    return
+  fi
+
+  mkdir -p "$CONFIG_DIR"
+  for source_file in "$DEFAULT_CONFIG_DIR"/*; do
+    [ -f "$source_file" ] || continue
+    target_file="$CONFIG_DIR/$(basename "$source_file")"
+    if [ ! -e "$target_file" ]; then
+      cp "$source_file" "$target_file"
+      echo "Initialized config: $target_file"
+    fi
+  done
+}
+
+load_runtime_env() {
+  [ -f "$RUNTIME_CONFIG_PATH" ] || return
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*) continue ;;
+    esac
+
+    eval "is_set=\${$key+x}"
+    if [ -z "$is_set" ]; then
+      export "$key=$value"
+    fi
+  done < "$RUNTIME_CONFIG_PATH"
+}
 
 json_text_value() {
   key="$1"
@@ -86,6 +127,10 @@ pull_model_with_progress() {
 
   [ "$curl_status" -eq 0 ] && [ "$api_error" -eq 0 ]
 }
+
+init_config
+load_runtime_env
+MODEL="${OLLAMA_MODEL:-qwen3:4b-instruct}"
 
 model_ok() {
   /bin/ollama show "$MODEL" >/dev/null 2>&1 \
