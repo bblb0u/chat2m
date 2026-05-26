@@ -26,15 +26,20 @@ def load_runtime_env() -> None:
     path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
     if not path.is_file():
         return
+    protected_keys = set(os.environ)
+    values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key) or key in os.environ:
+        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key):
             continue
-        os.environ[key] = value.strip()
+        values[key] = value.strip()
+    for key, value in values.items():
+        if key not in protected_keys:
+            os.environ[key] = value
 
 
 load_runtime_env()

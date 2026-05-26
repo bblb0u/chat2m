@@ -70,6 +70,8 @@ sync_runtime_env_defaults() {
 load_runtime_env() {
   [ -f "$RUNTIME_CONFIG_PATH" ] || return
 
+  protected_keys="$(mktemp)"
+  env | sed 's/=.*//' > "$protected_keys"
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       ''|\#*) continue ;;
@@ -82,11 +84,11 @@ load_runtime_env() {
       ''|*[!A-Za-z0-9_]*) continue ;;
     esac
 
-    eval "is_set=\${$key+x}"
-    if [ -z "$is_set" ]; then
+    if ! grep -Fxq "$key" "$protected_keys"; then
       export "$key=$value"
     fi
   done < "$RUNTIME_CONFIG_PATH"
+  rm -f "$protected_keys"
 }
 
 json_text_value() {

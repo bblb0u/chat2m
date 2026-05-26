@@ -4,6 +4,7 @@ import os
 import re
 import time
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,15 +19,20 @@ def load_runtime_env() -> None:
     path = Path(os.getenv("RUNTIME_CONFIG_PATH", "/app/config/runtime.env"))
     if not path.is_file():
         return
+    protected_keys = set(os.environ)
+    values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key) or key in os.environ:
+        if not key or not re.fullmatch(r"[A-Za-z0-9_]+", key):
             continue
-        os.environ[key] = value.strip()
+        values[key] = value.strip()
+    for key, value in values.items():
+        if key not in protected_keys:
+            os.environ[key] = value
 
 
 load_runtime_env()
@@ -201,6 +207,10 @@ class LLMConfigError(Exception):
     pass
 
 
+class LLMResponseError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class LLMResult:
     answer: str
@@ -270,23 +280,69 @@ def provider_is_online() -> bool:
     return bool(LLM_PROVIDER) and not provider_is_local()
 
 
-def extract_chat_completion_answer(data: dict[str, Any]) -> str:
+def remote_uses_responses_api() -> bool:
+    return LLM_CHAT_COMPLETIONS_PATH.rstrip("/").endswith("/responses")
+
+
+def extract_remote_answer(data: dict[str, Any]) -> str:
     choices = data.get("choices") or []
-    if not choices:
-        return ""
-    message_data = choices[0].get("message") or {}
-    content = message_data.get("content") or ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(parts)
-    return str(content)
+    if choices:
+        message_data = choices[0].get("message") or {}
+        content = message_data.get("content") or ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(text_parts(content))
+        return str(content)
+
+    output_text = data.get("output_text")
+    if isinstance(output_text, str):
+        return output_text
+
+    parts: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            parts.extend(text_parts(content))
+    return "\n".join(parts)
+
+
+def text_parts(items: list[Any]) -> list[str]:
+    parts: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            text = item.get("text") or item.get("content")
+            if isinstance(text, str):
+                parts.append(text)
+    return parts
+
+
+def response_json(response: httpx.Response) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except ValueError:
+        for line in response.text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line.removeprefix("data:").strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+                break
+            except ValueError:
+                continue
+        else:
+            detail = short_detail(response.text) or "empty response"
+            raise LLMResponseError(f"远程大模型返回了非 JSON 响应：{detail}") from None
+    if not isinstance(data, dict):
+        raise LLMResponseError("远程大模型返回了非对象 JSON 响应。")
+    return data
 
 
 def short_detail(text: str, limit: int = 800) -> str:
@@ -322,20 +378,32 @@ async def call_ollama(message: str, model: str) -> str:
 
 async def call_remote_llm(message: str) -> str:
     base_url = require_remote_config()
-    payload = {
-        "model": LLM_MODEL,
-        "messages": chat_messages(message),
-        "stream": False,
-        "temperature": LLM_TEMPERATURE,
-        "top_p": LLM_TOP_P,
-    }
+    if remote_uses_responses_api():
+        payload: dict[str, Any] = {
+            "model": LLM_MODEL,
+            "input": message,
+            "stream": False,
+            "temperature": LLM_TEMPERATURE,
+            "top_p": LLM_TOP_P,
+        }
+        system_prompt = str(profile().get("system_prompt", "")).strip()
+        if system_prompt:
+            payload["instructions"] = system_prompt
+    else:
+        payload = {
+            "model": LLM_MODEL,
+            "messages": chat_messages(message),
+            "stream": False,
+            "temperature": LLM_TEMPERATURE,
+            "top_p": LLM_TOP_P,
+        }
     if LLM_MAX_TOKENS_FIELD:
         payload[LLM_MAX_TOKENS_FIELD] = LLM_MAX_TOKENS
     timeout = httpx.Timeout(connect=LLM_CONNECT_TIMEOUT_SECONDS, read=LLM_TIMEOUT_SECONDS, write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{base_url}{LLM_CHAT_COMPLETIONS_PATH}", headers=remote_headers(), json=payload)
         response.raise_for_status()
-    return strip_thinking(extract_chat_completion_answer(response.json()))
+    return strip_thinking(extract_remote_answer(response_json(response)))
 
 
 def normalize_llm_route(route: str | None) -> str:
@@ -529,6 +597,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         result = await call_llm(message, request.llm_route)
     except LLMConfigError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except LLMResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except httpx.HTTPStatusError as exc:
         detail = short_detail(exc.response.text)
         raise HTTPException(status_code=502, detail=model_not_found_detail(request, detail)) from exc

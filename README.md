@@ -72,6 +72,18 @@ LLM_API_KEY=sk-...
 OLLAMA_MODEL=qwen3:4b-instruct
 ```
 
+如果在线网关要求根地址加 `/v1` 路径，例如 `https://sub2api.canghai.org/v1/chat/completions`，可以这样写：
+
+```env
+LLM_PROVIDER=remote
+LLM_BASE_URL=https://sub2api.canghai.org
+LLM_CHAT_COMPLETIONS_PATH=/v1/chat/completions
+LLM_REACHABILITY_PATH=/v1/models
+LLM_MODEL=gpt-5.5
+LLM_API_KEY=sk-...
+OLLAMA_MODEL=qwen3:4b-instruct
+```
+
 `LLM_PROVIDER=ollama` 或 `local` 表示本地；其他任意值都表示在线接口。代码不会内置 OpenAI、DeepSeek 或其他供应商地址，实际调用只看 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY`。
 
 屏蔽词、固定问答和 `system_prompt` 仍然由 `chat2m-gateway` 统一处理。切换 provider 只替换最终生成答案的大模型后端；输入会先过 `safety.yaml` 和 `profile.yaml`，模型输出后也会再过一次屏蔽词检查。
