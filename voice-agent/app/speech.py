@@ -8,6 +8,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import sounddevice as sd
@@ -40,6 +41,7 @@ from app.agent import (
     start_llm_route_cache,
     write_beep,
 )
+from app.respeaker import direction_answer, open_respeaker
 
 
 SPEECH_HOST = os.getenv("SPEECH_HOST", "0.0.0.0")
@@ -74,17 +76,27 @@ class WakeHandler(BaseHTTPRequestHandler):
     tts_config = None
     display = None
     beep_path = None
+    audio_source = None
     busy_lock = threading.Lock()
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
     def do_GET(self) -> None:
-        if self.path != "/health":
+        path = urlparse(self.path).path
+        if path == "/health":
+            self._send_json({"ok": True, "busy": WakeHandler.busy_lock.locked()})
+            return
+        if path == "/audio/source":
+            if WakeHandler.audio_source is None:
+                self._send_json({"ok": False, "source": "respeaker", "error": "unavailable"})
+                return
+            self._send_json(WakeHandler.audio_source.snapshot())
+            return
+        else:
             self.send_response(404)
             self.end_headers()
             return
-        self._send_json({"ok": True, "busy": WakeHandler.busy_lock.locked()})
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -112,6 +124,7 @@ class WakeHandler(BaseHTTPRequestHandler):
                 WakeHandler.tts_config,
                 WakeHandler.display,
                 WakeHandler.beep_path,
+                WakeHandler.audio_source,
             ),
             daemon=True,
         ).start()
@@ -119,10 +132,10 @@ class WakeHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def run_session_thread(recognizer, voice, tts_config, display: StatusClient, beep_path: Path) -> None:
+def run_session_thread(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
     try:
         log("wake signal received")
-        run_session(recognizer, voice, tts_config, display, beep_path)
+        run_session(recognizer, voice, tts_config, display, beep_path, audio_source)
     except Exception as exc:
         log(f"session failed: {exc}")
         if display is not None:
@@ -133,7 +146,7 @@ def run_session_thread(recognizer, voice, tts_config, display: StatusClient, bee
         WakeHandler.busy_lock.release()
 
 
-def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path) -> None:
+def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
     input_device = select_input_device(INPUT_DEVICE)
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     with sd.InputStream(
@@ -157,6 +170,12 @@ def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path:
                     speak_pausing_input(audio, SESSION_IDLE_RESPONSE, voice, tts_config, display)
                 display.set_state("idle")
                 return
+            direction_reply = direction_answer(command, audio_source)
+            if direction_reply is not None:
+                log(f"direction answer: {direction_reply}")
+                speak_pausing_input(audio, direction_reply, voice, tts_config, display)
+                drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
+                continue
             if not handle_conversation_turn(audio, command, voice, tts_config, display, llm_route):
                 return
             drain_audio(audio, POST_RESPONSE_DRAIN_SECONDS)
@@ -176,6 +195,7 @@ def main() -> None:
     log("loading Piper TTS model")
     voice, tts_config = create_tts()
     log(f"Piper TTS ready: sample_rate={voice.config.sample_rate}")
+    audio_source = open_respeaker()
     beep_path = Path("/tmp/chat2m_wake.wav")
     write_beep(beep_path)
     display = StatusClient(STATUS_URL)
@@ -185,6 +205,7 @@ def main() -> None:
     WakeHandler.tts_config = tts_config
     WakeHandler.display = display
     WakeHandler.beep_path = beep_path
+    WakeHandler.audio_source = audio_source
 
     display.set_state("idle")
     server = ThreadingHTTPServer((SPEECH_HOST, SPEECH_PORT), WakeHandler)

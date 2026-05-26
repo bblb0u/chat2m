@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import wave
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,15 @@ def env_float(key: str) -> float:
         raise RuntimeError(f"{key} must be a number in runtime.env") from None
 
 
+def env_bool(key: str) -> bool:
+    value = env_value(key).lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{key} must be a boolean in runtime.env")
+
+
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/models"))
 VOICE_KWS_MODEL_NAME = env_value("VOICE_KWS_MODEL_NAME")
 VOICE_ASR_MODEL_NAME = env_value("VOICE_ASR_MODEL_NAME")
@@ -99,7 +109,15 @@ OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
 SAMPLE_RATE = env_int("AUDIO_SAMPLE_RATE")
 CHUNK_SECONDS = env_float("AUDIO_CHUNK_SECONDS")
 INPUT_CHANNELS = env_int("AUDIO_INPUT_CHANNELS")
-INPUT_CHANNEL_INDEX = env_int("AUDIO_INPUT_CHANNEL_INDEX")
+INPUT_CHANNEL_INDEX_RAW = env_value("AUDIO_INPUT_CHANNEL_INDEX")
+INPUT_CHANNEL_INDEX_AUTO = INPUT_CHANNEL_INDEX_RAW.lower() == "auto"
+if INPUT_CHANNEL_INDEX_AUTO:
+    INPUT_CHANNEL_INDEX = 0
+else:
+    try:
+        INPUT_CHANNEL_INDEX = int(INPUT_CHANNEL_INDEX_RAW)
+    except ValueError:
+        raise RuntimeError("AUDIO_INPUT_CHANNEL_INDEX must be an integer or auto in runtime.env") from None
 KWS_THREADS = env_int("KWS_THREADS")
 ASR_THREADS = env_int("ASR_THREADS")
 GATEWAY_REQUEST_TIMEOUT_SECONDS = env_float("GATEWAY_REQUEST_TIMEOUT_SECONDS")
@@ -113,6 +131,12 @@ PRE_BEEP_DRAIN_SECONDS = env_float("PRE_BEEP_DRAIN_SECONDS")
 POST_BEEP_DRAIN_SECONDS = env_float("POST_BEEP_DRAIN_SECONDS")
 POST_RESPONSE_DRAIN_SECONDS = env_float("POST_RESPONSE_DRAIN_SECONDS")
 SPEECH_RMS_THRESHOLD = env_float("SPEECH_RMS_THRESHOLD")
+ASR_NOISE_GATE_ENABLED = env_bool("ASR_NOISE_GATE_ENABLED")
+ASR_NOISE_CALIBRATION_SECONDS = env_float("ASR_NOISE_CALIBRATION_SECONDS")
+ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
+ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
+ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
+ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
 PIPER_MODEL = MODELS_DIR / "piper" / VOICE_PIPER_MODEL_NAME / "model.onnx"
 PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
 PIPER_SPEAKER = env_int("PIPER_SPEAKER")
@@ -222,9 +246,21 @@ def select_input_device(selector: str) -> int | str | None:
 
     devices = sd.query_devices()
     selector_lower = selector.lower()
+    fallback_index: int | None = None
     for index, device in enumerate(devices):
-        if device.get("max_input_channels", 0) > 0 and selector_lower in str(device.get("name", "")).lower():
+        if selector_lower not in str(device.get("name", "")).lower():
+            continue
+        if device.get("max_input_channels", 0) > 0:
             return index
+        if fallback_index is None:
+            fallback_index = index
+
+    if fallback_index is not None:
+        log(
+            f"input device containing '{selector}' reports no input channels; "
+            f"trying device {fallback_index} anyway"
+        )
+        return fallback_index
 
     log(f"input device containing '{selector}' not found; using PortAudio default")
     return None
@@ -407,6 +443,10 @@ def drain_audio(audio: sd.InputStream, seconds: float) -> None:
 def mono(samples: np.ndarray) -> np.ndarray:
     if samples.ndim == 1:
         return samples
+    if INPUT_CHANNEL_INDEX_AUTO:
+        channel_rms = np.sqrt(np.mean(np.square(samples), axis=0))
+        channel_index = int(np.argmax(channel_rms))
+        return samples[:, channel_index]
     channel_index = min(max(INPUT_CHANNEL_INDEX, 0), samples.shape[1] - 1)
     return samples[:, channel_index]
 
@@ -416,6 +456,50 @@ def read_mono(audio: sd.InputStream, frames: int) -> np.ndarray:
     if overflowed:
         log("audio input overflowed; command audio may be clipped")
     return mono(samples).reshape(-1)
+
+
+def audio_rms(samples: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
+
+
+def decode_ready_asr(recognizer: sherpa_onnx.OnlineRecognizer, stream: Any) -> str:
+    while recognizer.is_ready(stream):
+        recognizer.decode_stream(stream)
+    return str(recognizer.get_result(stream) or "").strip()
+
+
+def feed_asr(
+    recognizer: sherpa_onnx.OnlineRecognizer,
+    stream: Any,
+    samples: np.ndarray,
+    last_text: str,
+) -> str:
+    stream.accept_waveform(SAMPLE_RATE, samples)
+    result = decode_ready_asr(recognizer, stream)
+    if result and result != last_text:
+        log(f"asr partial: {result}")
+        return result
+    return last_text
+
+
+def calibrate_asr_noise(audio: sd.InputStream, frames: int) -> tuple[float, list[tuple[np.ndarray, float]]]:
+    chunks: list[tuple[np.ndarray, float]] = []
+    if not ASR_NOISE_GATE_ENABLED or ASR_NOISE_CALIBRATION_SECONDS <= 0:
+        return SPEECH_RMS_THRESHOLD, chunks
+
+    deadline = time.monotonic() + ASR_NOISE_CALIBRATION_SECONDS
+    while time.monotonic() < deadline:
+        samples = read_mono(audio, frames)
+        chunks.append((samples.copy(), audio_rms(samples)))
+
+    if not chunks:
+        return SPEECH_RMS_THRESHOLD, chunks
+
+    percentile = min(max(ASR_NOISE_GATE_PERCENTILE, 0.0), 100.0)
+    noise_floor = float(np.percentile([rms for _, rms in chunks], percentile))
+    threshold = max(SPEECH_RMS_THRESHOLD, noise_floor * ASR_NOISE_GATE_RATIO + ASR_NOISE_GATE_OFFSET)
+    log(f"asr noise gate: floor={noise_floor:.4f} threshold={threshold:.4f}")
+    return threshold, chunks
 
 
 def listen_command(
@@ -429,6 +513,8 @@ def listen_command(
     last_text = ""
     speech_started = False
     max_rms = 0.0
+    preroll_chunks = max(1, int(max(ASR_PREROLL_SECONDS, CHUNK_SECONDS) / CHUNK_SECONDS))
+    pre_roll: deque[tuple[np.ndarray, float]] = deque(maxlen=preroll_chunks)
 
     if play_ready_beep and ready_beep_path is not None:
         drain_audio(audio, PRE_BEEP_DRAIN_SECONDS)
@@ -436,21 +522,37 @@ def listen_command(
         drain_audio(audio, POST_BEEP_DRAIN_SECONDS)
     log("listening for command")
     started = time.monotonic()
+    gate_threshold, calibration_chunks = calibrate_asr_noise(audio, chunk)
+    for samples, rms in calibration_chunks:
+        max_rms = max(max_rms, rms)
+        pre_roll.append((samples, rms))
+    if ASR_NOISE_GATE_ENABLED and pre_roll and max(rms for _, rms in pre_roll) >= gate_threshold:
+        speech_started = True
+        for samples, _ in pre_roll:
+            last_text = feed_asr(recognizer, stream, samples, last_text)
+        pre_roll.clear()
+
     while time.monotonic() - started < COMMAND_TIMEOUT_SECONDS:
         samples = read_mono(audio, chunk)
-        rms = float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
+        rms = audio_rms(samples)
         max_rms = max(max_rms, rms)
-        if rms >= SPEECH_RMS_THRESHOLD:
-            speech_started = True
+        active = rms >= gate_threshold
 
-        stream.accept_waveform(SAMPLE_RATE, samples)
-        while recognizer.is_ready(stream):
-            recognizer.decode_stream(stream)
-
-        result = recognizer.get_result(stream)
-        if result and result.strip() != last_text:
-            last_text = result.strip()
-            log(f"asr partial: {last_text}")
+        if ASR_NOISE_GATE_ENABLED:
+            if not speech_started:
+                pre_roll.append((samples.copy(), rms))
+                if active:
+                    speech_started = True
+                    for buffered_samples, _ in pre_roll:
+                        last_text = feed_asr(recognizer, stream, buffered_samples, last_text)
+                    pre_roll.clear()
+            else:
+                gated_samples = samples if active else np.zeros_like(samples)
+                last_text = feed_asr(recognizer, stream, gated_samples, last_text)
+        else:
+            if rms >= SPEECH_RMS_THRESHOLD:
+                speech_started = True
+            last_text = feed_asr(recognizer, stream, samples, last_text)
 
         elapsed = time.monotonic() - started
         if not speech_started and not last_text and elapsed >= COMMAND_LEADING_SILENCE_SECONDS:
@@ -463,9 +565,7 @@ def listen_command(
             break
 
     stream.input_finished()
-    while recognizer.is_ready(stream):
-        recognizer.decode_stream(stream)
-    final_text = (recognizer.get_result(stream) or last_text).strip()
+    final_text = (decode_ready_asr(recognizer, stream) or last_text).strip()
     del stream
     gc.collect()
     log(

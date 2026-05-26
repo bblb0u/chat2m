@@ -13,6 +13,7 @@ RUN apt-get update \
       curl \
       libasound2 \
       libportaudio2 \
+      libusb-1.0-0 \
       portaudio19-dev \
       python3 \
       python3-pip \

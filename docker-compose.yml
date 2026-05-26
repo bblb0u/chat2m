@@ -63,6 +63,7 @@ services:
     restart: unless-stopped
     devices:
       - /dev/snd:/dev/snd
+      - /dev/bus/usb:/dev/bus/usb
     command: ["python3", "-m", "app.speech"]
     environment:
       VOICE_ROLE: chat2m-speech
@@ -88,6 +89,7 @@ services:
     restart: unless-stopped
     devices:
       - /dev/snd:/dev/snd
+      - /dev/bus/usb:/dev/bus/usb
     command: ["python3", "-m", "app.wake"]
     environment:
       VOICE_ROLE: chat2m-wake
