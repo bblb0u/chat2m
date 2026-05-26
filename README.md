@@ -174,13 +174,14 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 首次启动会自动检查 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
 
-状态屏串口默认通过宿主机 `/dev/chat2m-display` 传入容器，避免绑定 `/dev/ttyACM0` 这类会随 USB 插拔顺序漂移的端口。首次部署或更换显示屏后，在宿主机执行：
+状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 
-```bash
-sudo scripts/install-display-udev.sh /dev/ttyACM0
+```env
+DISPLAY_SERIAL_PORT=auto
+DISPLAY_SERIAL_CANDIDATES=/host-dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00
 ```
 
-脚本会根据当前显示屏的 USB VID/PID/serial 写入 udev 规则。当前这块 ESP32-S3 显示屏会匹配 `303a:1001` 和 serial `44:1B:F6:85:CF:34`，生成 `/dev/chat2m-display`。
+这条规则会匹配同型号不同个体的显示屏，例如 serial 为 `44:1B:F6:85:CF:34` 或 `44:1B:F6:85:6C:C8` 的设备。若同一台机器上还有其他同型号 ESP32-S3 USB Serial/JTAG 设备，可把 `DISPLAY_SERIAL_CANDIDATES` 改成更精确的完整 `/host-dev/serial/by-id/...` 路径。
 
 ## 数据目录
 

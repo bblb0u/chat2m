@@ -28,9 +28,8 @@ def resolve_display_port(port: str) -> str:
     if port and port.lower() != "auto":
         return port
     candidates = DISPLAY_SERIAL_CANDIDATES or (
-        "/dev/chat2m-display",
-        "/dev/serial/by-id/*Espressif*",
-        "/host-dev/serial/by-id/*Espressif*",
+        "/host-dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00",
+        "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00",
     )
     for candidate in candidates:
         for resolved in glob(candidate):

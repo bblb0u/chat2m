@@ -43,9 +43,10 @@ services:
     container_name: chat2m-status
     restart: unless-stopped
     command: ["python3", "-m", "app.status"]
-    devices:
-      - /dev/chat2m-display:/dev/chat2m-display
+    device_cgroup_rules:
+      - "c 166:* rwm"
     volumes:
+      - /dev:/host-dev
       - ./data/config:/app/config
     environment:
       VOICE_MODELS_REQUIRED: "0"
