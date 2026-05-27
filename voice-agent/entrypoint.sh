@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-MODELS_DIR=/models
+MODELS_DIR="${MODELS_DIR:-/models}"
 DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
@@ -9,20 +9,114 @@ RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
 default_voice_model_set() {
   case "$VOICE_ROLE" in
     chat2m-wake) echo "kws" ;;
-    chat2m-speech) echo "asr,piper" ;;
-    *) echo "all" ;;
+    chat2m-speech) echo "speech" ;;
+    *) echo "kws,speech" ;;
   esac
 }
 
 model_selected() {
-  case ",$VOICE_MODEL_SET," in
-    *",all,"*|*",$1,"*) return 0 ;;
+  case ",$MODEL_SET," in
+    *",$1,"*) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 lock_key() {
-  printf '%s' "$VOICE_MODEL_SET" | tr -c 'A-Za-z0-9_.-' '-'
+  printf '%s' "$MODEL_SET" | tr -c 'A-Za-z0-9_.-' '-'
+}
+
+normalize_key() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+known_value_error() {
+  name="$1"
+  value="$2"
+  allowed="$3"
+  echo "$name '$value' is not supported. Allowed values: $allowed" >&2
+  exit 1
+}
+
+resolve_kws_model() {
+  KWS_MODEL_NAME="sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+  case "$KWS_MODEL_NAME" in
+    sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20)
+      KWS_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2"
+      ;;
+    *)
+      known_value_error "KWS_MODEL" "$KWS_MODEL_NAME" "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+      ;;
+  esac
+}
+
+resolve_asr_model() {
+  VOICE_ASR_ENGINE="$(normalize_key "${VOICE_ASR_ENGINE:-sherpa}")"
+  case "$VOICE_ASR_ENGINE" in
+    sherpa|sherpa-onnx)
+      VOICE_ASR_ENGINE="sherpa"
+      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20}"
+      case "$VOICE_ASR_MODEL" in
+        sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20)
+          ASR_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
+          ;;
+        *)
+          known_value_error "VOICE_ASR_MODEL" "$VOICE_ASR_MODEL" "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+          ;;
+      esac
+      ;;
+    sensevoice)
+      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-SenseVoiceSmall}"
+      case "$VOICE_ASR_MODEL" in
+        SenseVoiceSmall|sensevoice-small|sensevoicesmall)
+          VOICE_ASR_MODEL="SenseVoiceSmall"
+          ASR_HF_REPO_ID="FunAudioLLM/SenseVoiceSmall"
+          ASR_HF_REVISION="main"
+          ASR_REQUIRED_FILES="config.yaml,model.pt"
+          ;;
+        *)
+          known_value_error "VOICE_ASR_MODEL" "$VOICE_ASR_MODEL" "SenseVoiceSmall"
+          ;;
+      esac
+      ;;
+    *)
+      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sherpa, sensevoice"
+      ;;
+  esac
+}
+
+resolve_tts_model() {
+  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-piper}")"
+  case "$VOICE_TTS_ENGINE" in
+    piper)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
+      case "$VOICE_TTS_MODEL" in
+        zh_CN-huayan-medium)
+          PIPER_MODEL_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx"
+          PIPER_CONFIG_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
+          ;;
+        *)
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "zh_CN-huayan-medium"
+          ;;
+      esac
+      ;;
+    cosyvoice)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-CosyVoice-300M}"
+      case "$VOICE_TTS_MODEL" in
+        CosyVoice-300M|cosyvoice-300m)
+          VOICE_TTS_MODEL="CosyVoice-300M"
+          TTS_HF_REPO_ID="FunAudioLLM/CosyVoice-300M"
+          TTS_HF_REVISION="main"
+          TTS_REQUIRED_FILES="cosyvoice.yaml,flow.pt,llm.pt"
+          ;;
+        *)
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "CosyVoice-300M"
+          ;;
+      esac
+      ;;
+    *)
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "piper, cosyvoice"
+      ;;
+  esac
 }
 
 load_runtime_env() {
@@ -262,6 +356,40 @@ piper_model_ok() {
     && piper_runtime_ok
 }
 
+dir_has_files() {
+  dir="$1"
+  [ -d "$dir" ] || return 1
+  find "$dir" -type f -print -quit | grep -q .
+}
+
+required_relative_files_ok() {
+  base_dir="$1"
+  required_files="$2"
+
+  if [ -z "$required_files" ]; then
+    dir_has_files "$base_dir"
+    return
+  fi
+
+  old_ifs="$IFS"
+  IFS=","
+  set -- $required_files
+  IFS="$old_ifs"
+  for relative_file in "$@"; do
+    relative_file="$(printf '%s' "$relative_file" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$relative_file" ] || continue
+    required_files_ok "$base_dir/$relative_file" || return 1
+  done
+}
+
+sensevoice_model_ok() {
+  required_relative_files_ok "$ASR_MODEL" "$ASR_REQUIRED_FILES"
+}
+
+cosyvoice_model_ok() {
+  required_relative_files_ok "$TTS_MODEL_DIR" "$TTS_REQUIRED_FILES"
+}
+
 content_length() {
   curl -fsSIL --retry 5 --connect-timeout 20 "$1" \
     | awk 'tolower($1) == "content-length:" { size = $2 } END { gsub("\r", "", size); print size }'
@@ -337,20 +465,32 @@ download_with_progress() {
 download_and_extract() {
   name="$1"
   url="$2"
-  target="$MODELS_DIR/$name"
+  target="$3"
   archive="$MODELS_DIR/$name.tar.bz2"
 
   echo "[models] preparing $name"
   rm -rf "$target"
   download_with_progress "$archive" "$url" "$name"
   echo "[models] extracting $name"
-  python3 - "$archive" "$MODELS_DIR" <<'PY'
+  tmp_extract_dir="$MODELS_DIR/.extract.$name"
+  rm -rf "$tmp_extract_dir"
+  mkdir -p "$tmp_extract_dir"
+  python3 - "$archive" "$tmp_extract_dir" <<'PY'
 import sys
 import tarfile
 
 with tarfile.open(sys.argv[1], "r:bz2") as archive:
     archive.extractall(sys.argv[2])
 PY
+  extracted_dir="$tmp_extract_dir/$name"
+  if [ -d "$extracted_dir" ]; then
+    mkdir -p "$(dirname "$target")"
+    mv "$extracted_dir" "$target"
+  else
+    mkdir -p "$target"
+    find "$tmp_extract_dir" -mindepth 1 -maxdepth 1 -exec mv {} "$target"/ \;
+  fi
+  rm -rf "$tmp_extract_dir"
   rm -f "$archive"
   echo "[models] extracted $name"
 }
@@ -364,10 +504,33 @@ download_file() {
   download_with_progress "$output" "$url" "$(basename "$output")"
 }
 
+download_hf_snapshot() {
+  target="$1"
+  repo_id="$2"
+  revision="$3"
+  label="$4"
+
+  rm -rf "$target"
+  mkdir -p "$target"
+  echo "[models] downloading $label from Hugging Face repo $repo_id"
+  python3 - "$target" "$repo_id" "$revision" <<'PY'
+import sys
+from huggingface_hub import snapshot_download
+
+target, repo_id, revision = sys.argv[1:4]
+snapshot_download(
+    repo_id=repo_id,
+    revision=revision or None,
+    local_dir=target,
+)
+PY
+}
+
 ensure_archive_model() {
   name="$1"
   url="$2"
   check_name="$3"
+  target="$4"
 
   if "$check_name"; then
     echo "$name is ready"
@@ -375,7 +538,7 @@ ensure_archive_model() {
   fi
 
   echo "$name is missing or invalid; re-downloading"
-  download_and_extract "$name" "$url"
+  download_and_extract "$name" "$url" "$target"
 
   echo "[models] validating $name"
   if ! "$check_name"; then
@@ -386,18 +549,40 @@ ensure_archive_model() {
 
 ensure_piper_model() {
   if piper_model_ok; then
-    echo "piper $VOICE_PIPER_MODEL_NAME is ready"
+    echo "piper $VOICE_TTS_MODEL is ready"
     return
   fi
 
-  echo "piper $VOICE_PIPER_MODEL_NAME is missing or invalid; re-downloading"
+  echo "piper $VOICE_TTS_MODEL is missing or invalid; re-downloading"
   rm -rf "$PIPER_DIR"
-  download_file "$PIPER_DIR/model.onnx" "$VOICE_PIPER_MODEL_URL"
-  download_file "$PIPER_DIR/model.onnx.json" "$VOICE_PIPER_CONFIG_URL"
+  download_file "$PIPER_DIR/model.onnx" "$PIPER_MODEL_URL"
+  download_file "$PIPER_DIR/model.onnx.json" "$PIPER_CONFIG_URL"
 
-  echo "[models] validating piper $VOICE_PIPER_MODEL_NAME"
+  echo "[models] validating piper $VOICE_TTS_MODEL"
   if ! piper_model_ok; then
-    echo "piper $VOICE_PIPER_MODEL_NAME is still invalid after download" >&2
+    echo "piper $VOICE_TTS_MODEL is still invalid after download" >&2
+    exit 1
+  fi
+}
+
+ensure_hf_snapshot_model() {
+  name="$1"
+  repo_id="$2"
+  revision="$3"
+  check_name="$4"
+  target="$5"
+
+  if "$check_name"; then
+    echo "$name is ready"
+    return
+  fi
+
+  echo "$name is missing or invalid; re-downloading"
+  download_hf_snapshot "$target" "$repo_id" "$revision" "$name"
+
+  echo "[models] validating $name"
+  if ! "$check_name"; then
+    echo "$name is still invalid after download" >&2
     exit 1
   fi
 }
@@ -408,19 +593,30 @@ load_runtime_env
 
 VOICE_MODELS_REQUIRED="${VOICE_MODELS_REQUIRED:-1}"
 VOICE_ROLE="${VOICE_ROLE:-}"
-: "${VOICE_KWS_MODEL_NAME:?VOICE_KWS_MODEL_NAME must be set in runtime.env}"
-: "${VOICE_KWS_MODEL_URL:?VOICE_KWS_MODEL_URL must be set in runtime.env}"
-: "${VOICE_ASR_MODEL_NAME:?VOICE_ASR_MODEL_NAME must be set in runtime.env}"
-: "${VOICE_ASR_MODEL_URL:?VOICE_ASR_MODEL_URL must be set in runtime.env}"
-: "${VOICE_PIPER_MODEL_NAME:?VOICE_PIPER_MODEL_NAME must be set in runtime.env}"
-: "${VOICE_PIPER_MODEL_URL:?VOICE_PIPER_MODEL_URL must be set in runtime.env}"
-: "${VOICE_PIPER_CONFIG_URL:?VOICE_PIPER_CONFIG_URL must be set in runtime.env}"
+resolve_kws_model
+resolve_asr_model
+resolve_tts_model
 : "${WAKE_WORDS:?WAKE_WORDS must be set in runtime.env}"
 : "${AUDIO_SAMPLE_RATE:?AUDIO_SAMPLE_RATE must be set in runtime.env}"
-KWS_MODEL="$MODELS_DIR/$VOICE_KWS_MODEL_NAME"
-ASR_MODEL="$MODELS_DIR/$VOICE_ASR_MODEL_NAME"
-PIPER_DIR="$MODELS_DIR/piper/$VOICE_PIPER_MODEL_NAME"
-VOICE_MODEL_SET="${VOICE_MODEL_SET:-$(default_voice_model_set)}"
+KWS_MODEL="$MODELS_DIR/$KWS_MODEL_NAME"
+ASR_MODEL="$MODELS_DIR/$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
+PIPER_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
+TTS_MODEL_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
+export VOICE_ASR_ENGINE
+export VOICE_ASR_MODEL
+export VOICE_TTS_ENGINE
+export VOICE_TTS_MODEL
+MODEL_SET="$(default_voice_model_set)"
+if model_selected speech; then
+  case "$VOICE_ASR_ENGINE" in
+    sherpa) MODEL_SET="$MODEL_SET,asr" ;;
+    sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
+  esac
+  case "$VOICE_TTS_ENGINE" in
+    piper) MODEL_SET="$MODEL_SET,piper" ;;
+    cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
+  esac
+fi
 : "${LOCK_WAIT_LOG_SECONDS:?LOCK_WAIT_LOG_SECONDS must be set in runtime.env}"
 
 if [ "$VOICE_MODELS_REQUIRED" != "1" ]; then
@@ -434,30 +630,50 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
   sleep 2
   lock_waited=$((lock_waited + 2))
   if [ "$lock_waited" -eq 2 ]; then
-    echo "[models] waiting for voice model download lock: $VOICE_MODEL_SET"
+    echo "[models] waiting for voice model download lock: $MODEL_SET"
   elif [ "$LOCK_WAIT_LOG_SECONDS" -gt 0 ] && [ $((lock_waited % LOCK_WAIT_LOG_SECONDS)) -eq 0 ]; then
-    echo "[models] still waiting for voice model download lock: $VOICE_MODEL_SET (${lock_waited}s)"
+    echo "[models] still waiting for voice model download lock: $MODEL_SET (${lock_waited}s)"
   fi
 done
-echo "[models] voice model download lock acquired: $VOICE_MODEL_SET"
+echo "[models] voice model download lock acquired: $MODEL_SET"
 trap 'rmdir "$LOCK_DIR"' EXIT
 
 if model_selected kws; then
   ensure_archive_model \
-    "$VOICE_KWS_MODEL_NAME" \
-    "$VOICE_KWS_MODEL_URL" \
-    kws_model_ok
+    "$KWS_MODEL_NAME" \
+    "$KWS_MODEL_URL" \
+    kws_model_ok \
+    "$KWS_MODEL"
 fi
 
 if model_selected asr; then
   ensure_archive_model \
-    "$VOICE_ASR_MODEL_NAME" \
-    "$VOICE_ASR_MODEL_URL" \
-    asr_model_ok
+    "$VOICE_ASR_MODEL" \
+    "$ASR_MODEL_URL" \
+    asr_model_ok \
+    "$ASR_MODEL"
 fi
 
 if model_selected piper; then
   ensure_piper_model
+fi
+
+if model_selected sensevoice; then
+  ensure_hf_snapshot_model \
+    "$VOICE_ASR_MODEL" \
+    "$ASR_HF_REPO_ID" \
+    "$ASR_HF_REVISION" \
+    sensevoice_model_ok \
+    "$ASR_MODEL"
+fi
+
+if model_selected cosyvoice; then
+  ensure_hf_snapshot_model \
+    "$VOICE_TTS_MODEL" \
+    "$TTS_HF_REPO_ID" \
+    "$TTS_HF_REVISION" \
+    cosyvoice_model_ok \
+    "$TTS_MODEL_DIR"
 fi
 
 trap - EXIT

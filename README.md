@@ -172,7 +172,27 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 Piper 语速，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
 
-首次启动会自动检查 sherpa-onnx KWS/ASR 模型和 Piper 中文 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
+首次启动会自动检查唤醒、ASR 和 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
+
+ASR/TTS 模型不打进镜像，避免镜像本身过大。运行时只需要在 `data/config/runtime.env` 里选择引擎和模型：
+
+```env
+VOICE_ASR_ENGINE=sherpa
+VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+VOICE_TTS_ENGINE=piper
+VOICE_TTS_MODEL=zh_CN-huayan-medium
+```
+
+目前内置可选项：
+
+```env
+VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
+VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M
+```
+
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。当前默认运行链路仍是 sherpa-onnx + Piper；切到 `sensevoice` 或 `cosyvoice` 会先完成对应模型的按需下载。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

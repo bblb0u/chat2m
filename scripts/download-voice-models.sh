@@ -8,16 +8,28 @@ mkdir -p "$MODELS_DIR"
 download_and_extract() {
   local name="$1"
   local url="$2"
+  local target="$3"
   local archive="$MODELS_DIR/$name.tar.bz2"
+  local tmp_extract_dir="$MODELS_DIR/.extract.$name"
 
-  if [ -d "$MODELS_DIR/$name" ]; then
+  if [ -d "$target" ]; then
     echo "$name already exists"
     return
   fi
 
   echo "Downloading $name"
   curl -fL --retry 5 --connect-timeout 20 "$url" -o "$archive"
-  tar -xjf "$archive" -C "$MODELS_DIR"
+  rm -rf "$tmp_extract_dir"
+  mkdir -p "$tmp_extract_dir"
+  tar -xjf "$archive" -C "$tmp_extract_dir"
+  mkdir -p "$(dirname "$target")"
+  if [ -d "$tmp_extract_dir/$name" ]; then
+    mv "$tmp_extract_dir/$name" "$target"
+  else
+    mkdir -p "$target"
+    find "$tmp_extract_dir" -mindepth 1 -maxdepth 1 -exec mv {} "$target"/ \;
+  fi
+  rm -rf "$tmp_extract_dir"
   rm -f "$archive"
 }
 
@@ -37,11 +49,13 @@ download_file() {
 
 download_and_extract \
   "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20" \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2"
+  "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2" \
+  "$MODELS_DIR/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 
 download_and_extract \
   "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20" \
-  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
+  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
+  "$MODELS_DIR/sherpa/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
 
 PIPER_DIR="$MODELS_DIR/piper/zh_CN-huayan-medium"
 download_file \
