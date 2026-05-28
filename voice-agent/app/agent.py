@@ -106,7 +106,7 @@ TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
-VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
+VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cuda").strip().lower()
 COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文女"
 COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
 COSYVOICE_SPEED = env_float("COSYVOICE_SPEED")
@@ -637,6 +637,7 @@ def create_cosyvoice_tts() -> TextToSpeech:
             if path not in sys.path:
                 sys.path.insert(0, path)
     import torch
+    install_cosyvoice_inference_stubs()
     from cosyvoice.cli.cosyvoice import CosyVoice
 
     require_file(TTS_MODEL_DIR / "cosyvoice.yaml")
@@ -648,17 +649,15 @@ def create_cosyvoice_tts() -> TextToSpeech:
     if VOICE_TTS_MODEL.endswith(("-SFT", "-Instruct")):
         require_file(TTS_MODEL_DIR / "spk2info.pt")
     cuda_available = torch.cuda.is_available()
-    if VOICE_TTS_DEVICE in {"cuda", "gpu"} or VOICE_TTS_DEVICE.startswith("cuda:"):
-        if not cuda_available:
-            raise RuntimeError(
-                f"VOICE_TTS_DEVICE={VOICE_TTS_DEVICE} was requested, "
-                f"but torch cuda is not available: torch={torch.__version__} cuda={torch.version.cuda}"
-            )
-        device = VOICE_TTS_DEVICE
-    elif VOICE_TTS_DEVICE == "auto":
-        device = "cuda" if cuda_available else "cpu"
-    else:
-        device = "cpu"
+    if VOICE_TTS_DEVICE not in {"auto", "cuda", "gpu"} and not VOICE_TTS_DEVICE.startswith("cuda:"):
+        raise RuntimeError("CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto.")
+    if not cuda_available:
+        raise RuntimeError(
+            "CosyVoice requires torch CUDA, "
+            f"but CUDA is not available: device={VOICE_TTS_DEVICE} "
+            f"torch={torch.__version__} cuda={torch.version.cuda}"
+        )
+    device = "cuda" if VOICE_TTS_DEVICE in {"auto", "gpu"} else VOICE_TTS_DEVICE
     log(
         "CosyVoice TTS config: "
         f"model={TTS_MODEL_DIR} device={device} torch={torch.__version__} cuda={torch.version.cuda} "
@@ -677,7 +676,6 @@ def create_cosyvoice_tts() -> TextToSpeech:
         init_kwargs["fp16"] = COSYVOICE_FP16
     if "device" in signature.parameters:
         init_kwargs["device"] = device
-    install_cosyvoice_inference_stubs()
     model = CosyVoice(str(TTS_MODEL_DIR), **init_kwargs)
     return CosyVoiceTTS(model)
 
@@ -685,6 +683,8 @@ def create_cosyvoice_tts() -> TextToSpeech:
 def install_cosyvoice_inference_stubs() -> None:
     import importlib
     import types
+
+    install_torchaudio_stub()
 
     try:
         dataset_package = importlib.import_module("cosyvoice.dataset")
@@ -745,6 +745,39 @@ def install_cosyvoice_inference_stubs() -> None:
     sys.modules["matcha.utils.logging_utils"] = logging_utils
     sys.modules["matcha.utils.rich_utils"] = rich_utils
     sys.modules["matcha.utils.utils"] = utils
+
+
+def install_torchaudio_stub() -> None:
+    import types
+
+    if "torchaudio" in sys.modules:
+        return
+
+    torchaudio = types.ModuleType("torchaudio")
+    compliance = types.ModuleType("torchaudio.compliance")
+    kaldi = types.ModuleType("torchaudio.compliance.kaldi")
+    transforms = types.ModuleType("torchaudio.transforms")
+
+    def unavailable(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("torchaudio is not available in CosyVoice SFT inference runtime")
+
+    class Resample:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def __call__(self, speech: Any) -> Any:
+            return speech
+
+    kaldi.fbank = unavailable
+    torchaudio.load = unavailable
+    transforms.Resample = Resample
+    compliance.kaldi = kaldi
+    torchaudio.compliance = compliance
+    torchaudio.transforms = transforms
+    sys.modules["torchaudio"] = torchaudio
+    sys.modules["torchaudio.compliance"] = compliance
+    sys.modules["torchaudio.compliance.kaldi"] = kaldi
+    sys.modules["torchaudio.transforms"] = transforms
 
 
 def create_tts() -> tuple[TextToSpeech, None]:

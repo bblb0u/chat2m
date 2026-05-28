@@ -42,7 +42,7 @@ jobs:
           - image: chat2m-wake
             dockerfile: voice-agent/Dockerfile
           - image: chat2m-speech
-            dockerfile: voice-agent/Dockerfile
+            dockerfile: voice-agent/Dockerfile.speech
           - image: chat2m-status
             dockerfile: voice-agent/Dockerfile
 

@@ -98,7 +98,7 @@ resolve_asr_model() {
 }
 
 resolve_tts_model() {
-  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-piper}")"
+  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-cosyvoice}")"
   case "$VOICE_TTS_ENGINE" in
     piper)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
@@ -457,6 +457,15 @@ install_python_packages() {
   python3 -m pip install --user --no-cache-dir --retries 10 --timeout 180 "$@"
 }
 
+install_python_package_url() {
+  label="$1"
+  url="$2"
+
+  echo "[runtime] installing $label dependency"
+  mkdir -p "$PYTHON_RUNTIME_PREFIX"
+  python3 -m pip install --user --no-cache-dir --retries 10 --timeout 180 "$url"
+}
+
 ensure_apt_packages() {
   missing=""
   for package in "$@"; do
@@ -490,6 +499,7 @@ ensure_jetson_cuda_runtime() {
   ensure_jetson_apt_sources
   ensure_apt_packages \
     cuda-cudart-11-4 \
+    cuda-nvrtc-11-4 \
     libcublas-11-4 \
     libcufft-11-4 \
     libcudnn8 \
@@ -517,36 +527,60 @@ print(f"[runtime] torch cuda ready: torch={torch.__version__} cuda={torch.versio
 PY
 }
 
+link_jetson_cuda_python_libs() {
+  nvidia_dir="$PYTHON_RUNTIME_SITE/nvidia"
+  mkdir -p "$nvidia_dir"
+
+  link_cuda_lib_dir cuda_runtime "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcudart.so*"
+  link_cuda_lib_dir cuda_nvrtc "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libnvrtc.so*"
+  link_cuda_lib_dir cublas "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcublas.so*" "libcublasLt.so*"
+  link_cuda_lib_dir cudnn "/usr/lib/aarch64-linux-gnu" "libcudnn.so*"
+  link_cuda_lib_dir cufft "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcufft.so*"
+  link_cuda_lib_dir curand "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcurand.so*"
+  link_cuda_lib_dir cusolver "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcusolver.so*"
+  link_cuda_lib_dir cusparse "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcusparse.so*"
+  link_cuda_lib_dir nvtx "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libnvToolsExt.so*"
+}
+
+link_cuda_lib_dir() {
+  package_name="$1"
+  source_dir="$2"
+  shift 2
+  target_dir="$PYTHON_RUNTIME_SITE/nvidia/$package_name/lib"
+  mkdir -p "$target_dir"
+
+  for pattern in "$@"; do
+    for source_file in "$source_dir"/$pattern; do
+      [ -e "$source_file" ] || continue
+      ln -sf "$source_file" "$target_dir/$(basename "$source_file")"
+    done
+  done
+}
+
 cosyvoice_cuda_requested() {
-  case "$(normalize_key "${VOICE_TTS_DEVICE:-auto}")" in
+  [ "${VOICE_TTS_ENGINE:-}" = "cosyvoice" ] || return 1
+  case "$(normalize_key "${VOICE_TTS_DEVICE:-cuda}")" in
     cuda|gpu|cuda:*) return 0 ;;
-    auto)
-      [ -e /dev/nvidiactl ] || [ -e /dev/nvhost-gpu ] || return 1
-      return 0
+    auto) return 0 ;;
+    *)
+      echo "CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto." >&2
+      exit 1
       ;;
-    *) return 1 ;;
   esac
 }
 
 install_cosyvoice_torch() {
-  if cosyvoice_cuda_requested; then
-    ensure_jetson_cuda_runtime
-    if verify_torch_cuda_runtime; then
-      return
-    fi
-    install_python_packages \
-      "Jetson CUDA PyTorch" \
-      "--index-url" "${JETSON_PYTORCH_INDEX_URL:-https://pypi.jetson-ai-lab.dev/jp5/cu114}" \
-      "torch==${JETSON_TORCH_VERSION:-2.2.0}" \
-      "torchaudio==${JETSON_TORCHAUDIO_VERSION:-2.2.0}"
-    verify_torch_cuda_runtime
+  cosyvoice_cuda_requested
+  ensure_jetson_cuda_runtime
+  link_jetson_cuda_python_libs
+  if verify_torch_cuda_runtime; then
     return
   fi
-
-  install_python_packages \
-    "PyTorch CPU" \
-    "torch==${COSYVOICE_TORCH_VERSION:-2.3.1}" \
-    "torchaudio==${COSYVOICE_TORCHAUDIO_VERSION:-2.3.1}"
+  install_python_package_url \
+    "Jetson CUDA PyTorch" \
+    "${JETSON_TORCH_WHEEL_URL:-https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl}"
+  link_jetson_cuda_python_libs
+  verify_torch_cuda_runtime
 }
 
 ensure_kws_runtime() {
@@ -578,17 +612,15 @@ ensure_sensevoice_runtime() {
   if sensevoice_runtime_ok; then
     return
   fi
-  install_python_packages "SenseVoice streaming ASR" "sense-voice-streaming-asr==0.1.1" "onnxruntime==1.18.0" "sentencepiece"
+  install_python_packages "SenseVoice streaming ASR" "sense-voice-streaming-asr==0.1.1" "onnxruntime==${ONNXRUNTIME_VERSION:-1.16.3}" "sentencepiece"
 }
 
 cosyvoice_runtime_ok() {
   python_module_ok torch \
-    && python_module_ok torchaudio \
     && python_module_ok onnxruntime \
     && python_module_ok hyperpyyaml \
     && python_module_ok transformers \
     && python_module_ok whisper \
-    && python_module_ok x_transformers \
     && python_module_ok conformer \
     && python_module_ok diffusers \
     && python_module_ok librosa \
@@ -608,10 +640,9 @@ ensure_cosyvoice_runtime() {
   if [ -d "$COSYVOICE_CODE_DIR/cosyvoice" ] \
     && [ -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ] \
     && cosyvoice_runtime_ok; then
-    if cosyvoice_cuda_requested; then
-      ensure_jetson_cuda_runtime
-      verify_torch_cuda_runtime
-    fi
+    cosyvoice_cuda_requested
+    ensure_jetson_cuda_runtime
+    verify_torch_cuda_runtime
     return
   fi
 
@@ -619,9 +650,11 @@ ensure_cosyvoice_runtime() {
   install_cosyvoice_torch
   install_python_packages \
     "CosyVoice runtime" \
-    "onnxruntime==1.18.0" \
+    "onnxruntime==${ONNXRUNTIME_VERSION:-1.16.3}" \
+    "accelerate==0.34.2" \
     "conformer==0.3.2" \
     "diffusers==0.29.0" \
+    "einops==0.8.0" \
     "hydra-core" \
     "HyperPyYAML==1.2.3" \
     "inflect==7.3.1" \
@@ -630,11 +663,10 @@ ensure_cosyvoice_runtime() {
     "omegaconf==2.3.0" \
     "openai-whisper==20231117" \
     "regex" \
-    "scipy" \
+    "scipy==1.10.1" \
     "sentencepiece" \
-    "tiktoken" \
-    "transformers==4.51.3" \
-    "x-transformers==2.11.24"
+    "tiktoken==0.7.0" \
+    "transformers==4.45.2"
   if [ "${COSYVOICE_TEXT_FRONTEND:-0}" = "1" ] || [ "${COSYVOICE_TEXT_FRONTEND:-0}" = "true" ]; then
     install_python_packages "CosyVoice text frontend" "wetext==0.0.4"
   fi
@@ -642,7 +674,7 @@ ensure_cosyvoice_runtime() {
     echo "[runtime] downloading CosyVoice code"
     rm -rf "$COSYVOICE_CODE_DIR"
     mkdir -p "$(dirname "$COSYVOICE_CODE_DIR")"
-    git clone --depth 1 https://github.com/FunAudioLLM/CosyVoice.git "$COSYVOICE_CODE_DIR"
+    git clone --depth 1 --branch "${COSYVOICE_GIT_REF:-v2.0}" https://github.com/FunAudioLLM/CosyVoice.git "$COSYVOICE_CODE_DIR"
   fi
   if [ ! -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ]; then
     echo "[runtime] downloading Matcha-TTS code"
