@@ -39,6 +39,13 @@ normalize_key() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+env_flag_enabled() {
+  case "$(normalize_key "${1:-}")" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 known_value_error() {
   name="$1"
   value="$2"
@@ -430,6 +437,231 @@ cosyvoice_model_ok() {
   required_relative_files_ok "$TTS_MODEL_DIR" "$TTS_REQUIRED_FILES"
 }
 
+cosyvoice_fp16_jit_ok() {
+  required_files_ok \
+    "$TTS_MODEL_DIR/llm.text_encoder.fp16.zip" \
+    "$TTS_MODEL_DIR/flow.encoder.fp16.zip"
+}
+
+cosyvoice_fp16_trt_ok() {
+  required_files_ok "$TTS_MODEL_DIR/flow.decoder.estimator.fp16.mygpu.plan"
+}
+
+ensure_cosyvoice_fp16_jit() {
+  env_flag_enabled "${COSYVOICE_LOAD_JIT:-0}" || return 0
+
+  if ! env_flag_enabled "${COSYVOICE_FP16:-0}"; then
+    echo "COSYVOICE_LOAD_JIT=1 requires COSYVOICE_FP16=1; fp32 JIT is not supported in this image" >&2
+    exit 1
+  fi
+
+  if cosyvoice_fp16_jit_ok; then
+    echo "cosyvoice fp16 JIT artifacts are ready"
+    return
+  fi
+
+  echo "[runtime] generating CosyVoice fp16 JIT artifacts"
+  python3 - "$TTS_MODEL_DIR" <<'PY'
+import importlib
+import importlib.machinery
+import os
+import sys
+import types
+from pathlib import Path
+
+
+def install_torchaudio_stub():
+    if "torchaudio" in sys.modules:
+        return
+
+    torchaudio = types.ModuleType("torchaudio")
+    compliance = types.ModuleType("torchaudio.compliance")
+    kaldi = types.ModuleType("torchaudio.compliance.kaldi")
+    transforms = types.ModuleType("torchaudio.transforms")
+    torchaudio.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
+    compliance.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance", loader=None)
+    kaldi.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance.kaldi", loader=None)
+    transforms.__spec__ = importlib.machinery.ModuleSpec("torchaudio.transforms", loader=None)
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("torchaudio is not available in CosyVoice inference runtime")
+
+    class Resample:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, speech):
+            return speech
+
+    kaldi.fbank = unavailable
+    torchaudio.load = unavailable
+    torchaudio.save = unavailable
+    transforms.Resample = Resample
+    transforms.Spectrogram = unavailable
+    transforms.MelSpectrogram = unavailable
+    torchaudio.compliance = compliance
+    torchaudio.transforms = transforms
+    compliance.kaldi = kaldi
+    sys.modules["torchaudio"] = torchaudio
+    sys.modules["torchaudio.compliance"] = compliance
+    sys.modules["torchaudio.compliance.kaldi"] = kaldi
+    sys.modules["torchaudio.transforms"] = transforms
+
+
+def install_cosyvoice_stubs():
+    install_torchaudio_stub()
+
+    try:
+        dataset_package = importlib.import_module("cosyvoice.dataset")
+    except Exception:
+        dataset_package = None
+
+    if dataset_package is not None:
+        processor = types.ModuleType("cosyvoice.dataset.processor")
+
+        def unused_processor(*args, **kwargs):
+            raise RuntimeError("CosyVoice dataset processor is not available in inference runtime")
+
+        for name in (
+            "parquet_opener",
+            "tokenize",
+            "filter",
+            "resample",
+            "compute_fbank",
+            "parse_embedding",
+            "shuffle",
+            "sort",
+            "batch",
+            "padding",
+        ):
+            setattr(processor, name, unused_processor)
+        sys.modules["cosyvoice.dataset.processor"] = processor
+        setattr(dataset_package, "processor", processor)
+
+    pylogger = types.ModuleType("matcha.utils.pylogger")
+
+    def get_pylogger(name=__name__):
+        import logging
+
+        return logging.getLogger(name)
+
+    pylogger.get_pylogger = get_pylogger
+    sys.modules["matcha.utils.pylogger"] = pylogger
+
+    def noop(*args, **kwargs):
+        return None
+
+    instantiators = types.ModuleType("matcha.utils.instantiators")
+    instantiators.instantiate_callbacks = lambda *args, **kwargs: []
+    instantiators.instantiate_loggers = lambda *args, **kwargs: []
+
+    logging_utils = types.ModuleType("matcha.utils.logging_utils")
+    logging_utils.log_hyperparameters = noop
+
+    rich_utils = types.ModuleType("matcha.utils.rich_utils")
+    rich_utils.enforce_tags = noop
+    rich_utils.print_config_tree = noop
+
+    utils = types.ModuleType("matcha.utils.utils")
+    utils.extras = noop
+    utils.get_metric_value = lambda *args, **kwargs: 0.0
+    utils.task_wrapper = lambda func: func
+
+    sys.modules["matcha.utils.instantiators"] = instantiators
+    sys.modules["matcha.utils.logging_utils"] = logging_utils
+    sys.modules["matcha.utils.rich_utils"] = rich_utils
+    sys.modules["matcha.utils.utils"] = utils
+
+
+def patch_onnxruntime_provider():
+    import onnxruntime
+
+    if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+        return
+
+    original_inference_session = onnxruntime.InferenceSession
+
+    def inference_session(*args, **kwargs):
+        providers = kwargs.get("providers")
+        if providers and "CUDAExecutionProvider" in providers:
+            kwargs["providers"] = [provider for provider in providers if provider != "CUDAExecutionProvider"]
+            if "CPUExecutionProvider" not in kwargs["providers"]:
+                kwargs["providers"].append("CPUExecutionProvider")
+        return original_inference_session(*args, **kwargs)
+
+    onnxruntime.InferenceSession = inference_session
+
+
+def save_fp16_script(module, target):
+    import torch
+
+    target = Path(target)
+    tmp = target.with_name(target.name + ".tmp")
+    if tmp.exists():
+        tmp.unlink()
+    module = module.half().eval()
+    script = torch.jit.script(module)
+    script = torch.jit.freeze(script)
+    script = torch.jit.optimize_for_inference(script)
+    script.save(str(tmp))
+    os.replace(tmp, target)
+
+
+def main():
+    model_dir = Path(sys.argv[1])
+    for path in reversed([item for item in os.environ.get("COSYVOICE_PACKAGE_PATH", "").split(":") if item]):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CosyVoice fp16 JIT export requires CUDA")
+
+    install_cosyvoice_stubs()
+    patch_onnxruntime_provider()
+
+    from cosyvoice.cli.cosyvoice import CosyVoice
+
+    torch._C._jit_set_fusion_strategy([("STATIC", 1)])
+    torch._C._jit_set_profiling_mode(False)
+    torch._C._jit_set_profiling_executor(False)
+
+    model = CosyVoice(str(model_dir), load_jit=False, load_trt=False, fp16=True)
+    save_fp16_script(model.model.llm.text_encoder, model_dir / "llm.text_encoder.fp16.zip")
+    save_fp16_script(model.model.flow.encoder, model_dir / "flow.encoder.fp16.zip")
+
+
+if __name__ == "__main__":
+    main()
+PY
+
+  if ! cosyvoice_fp16_jit_ok; then
+    echo "CosyVoice fp16 JIT artifacts are still invalid after export" >&2
+    exit 1
+  fi
+}
+
+ensure_cosyvoice_fp16_trt() {
+  env_flag_enabled "${COSYVOICE_LOAD_TRT:-0}" || return 0
+
+  if ! env_flag_enabled "${COSYVOICE_FP16:-0}"; then
+    echo "COSYVOICE_LOAD_TRT=1 requires COSYVOICE_FP16=1; fp32 TRT is not supported in this image" >&2
+    exit 1
+  fi
+
+  ensure_cosyvoice_tensorrt_runtime
+
+  if cosyvoice_fp16_trt_ok; then
+    echo "cosyvoice fp16 TensorRT plan is ready"
+    return
+  fi
+
+  echo "Missing CosyVoice fp16 TensorRT plan: $TTS_MODEL_DIR/flow.decoder.estimator.fp16.mygpu.plan" >&2
+  echo "Disable COSYVOICE_LOAD_TRT or build the plan inside the speech container before startup." >&2
+  exit 1
+}
+
 python_module_ok() {
   python3 - "$1" <<'PY'
 import importlib.util
@@ -518,6 +750,24 @@ ensure_jetson_cuda_runtime() {
     libcusolver-11-4 \
     libcusparse-11-4 \
     libnpp-11-4
+}
+
+ensure_cosyvoice_tensorrt_runtime() {
+  ensure_jetson_apt_sources
+  ensure_apt_packages \
+    libcudla-11-4 \
+    libnvinfer8 \
+    libnvinfer-plugin8 \
+    libnvonnxparsers8 \
+    libnvparsers8 \
+    python3-libnvinfer \
+    tensorrt-libs \
+    libnvinfer-bin
+
+  if ! python_module_ok onnx; then
+    install_python_packages "ONNX runtime export helper" "onnx==1.16.1"
+  fi
+  python_module_ok tensorrt
 }
 
 verify_torch_cuda_runtime() {
@@ -690,6 +940,9 @@ ensure_cosyvoice_runtime() {
     && cosyvoice_runtime_ok; then
     cosyvoice_cuda_requested
     ensure_jetson_cuda_runtime
+    if env_flag_enabled "${COSYVOICE_LOAD_TRT:-0}"; then
+      ensure_cosyvoice_tensorrt_runtime
+    fi
     verify_torch_cuda_runtime
     return
   fi
@@ -1084,6 +1337,8 @@ if model_selected cosyvoice; then
     cosyvoice_model_ok \
     "$TTS_MODEL_DIR" \
     "$TTS_REQUIRED_FILES"
+  ensure_cosyvoice_fp16_jit
+  ensure_cosyvoice_fp16_trt
 fi
 
 trap - EXIT

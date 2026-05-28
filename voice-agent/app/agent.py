@@ -13,7 +13,7 @@ import wave
 from collections import deque
 from itertools import chain
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, Iterable, Protocol
 
 from app.runtime import DisplayClient, env_bool, env_float, env_int, env_value, log
@@ -107,6 +107,11 @@ TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
 TTS_PLAYBACK_MODE = os.getenv("TTS_PLAYBACK_MODE", "stream").strip().lower()
 TTS_PREBUFFER_SECONDS = float(os.getenv("TTS_PREBUFFER_SECONDS", "2.4").strip() or "2.4")
+TTS_WARMUP_TEXTS = tuple(
+    text.strip()
+    for text in os.getenv("TTS_WARMUP_TEXTS", "").split("|")
+    if text.strip()
+)
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cuda").strip().lower()
@@ -118,7 +123,9 @@ COSYVOICE_LOAD_JIT = env_bool("COSYVOICE_LOAD_JIT")
 COSYVOICE_LOAD_TRT = env_bool("COSYVOICE_LOAD_TRT")
 COSYVOICE_FP16 = env_bool("COSYVOICE_FP16")
 COSYVOICE_STREAM_TOKEN_HOP_LEN = int(os.getenv("COSYVOICE_STREAM_TOKEN_HOP_LEN", "20").strip() or "20")
+COSYVOICE_STREAM_TOKEN_OVERLAP_LEN = int(os.getenv("COSYVOICE_STREAM_TOKEN_OVERLAP_LEN", "20").strip() or "20")
 COSYVOICE_STREAM_SCALE_FACTOR = int(os.getenv("COSYVOICE_STREAM_SCALE_FACTOR", "1").strip() or "1")
+COSYVOICE_FLOW_STEPS = int(os.getenv("COSYVOICE_FLOW_STEPS", "10").strip() or "10")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 NO_COMMAND_RESPONSE = env_value("NO_COMMAND_RESPONSE")
@@ -654,6 +661,19 @@ def create_cosyvoice_tts() -> TextToSpeech:
     require_file(TTS_MODEL_DIR / "speech_tokenizer_v1.onnx")
     if VOICE_TTS_MODEL.endswith(("-SFT", "-Instruct")):
         require_file(TTS_MODEL_DIR / "spk2info.pt")
+    if COSYVOICE_LOAD_JIT:
+        if not COSYVOICE_FP16:
+            raise RuntimeError("CosyVoice JIT acceleration is configured for fp16 only; set COSYVOICE_FP16=1")
+        require_file(TTS_MODEL_DIR / "llm.text_encoder.fp16.zip")
+        require_file(TTS_MODEL_DIR / "flow.encoder.fp16.zip")
+    if COSYVOICE_LOAD_TRT:
+        if not COSYVOICE_FP16:
+            raise RuntimeError("CosyVoice TRT acceleration is configured for fp16 only; set COSYVOICE_FP16=1")
+        plan_path = TTS_MODEL_DIR / "flow.decoder.estimator.fp16.mygpu.plan"
+        require_file(plan_path)
+        if plan_path.stat().st_size <= 0:
+            raise RuntimeError(f"missing required non-empty TensorRT plan: {plan_path}")
+        init_cosyvoice_tensorrt_plugins()
     cuda_available = torch.cuda.is_available()
     if VOICE_TTS_DEVICE not in {"auto", "cuda", "gpu"} and not VOICE_TTS_DEVICE.startswith("cuda:"):
         raise RuntimeError("CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto.")
@@ -683,7 +703,7 @@ def create_cosyvoice_tts() -> TextToSpeech:
     init_kwargs: dict[str, Any] = {}
     signature = inspect.signature(CosyVoice)
     if "load_jit" in signature.parameters:
-        init_kwargs["load_jit"] = COSYVOICE_LOAD_JIT
+        init_kwargs["load_jit"] = False
     if "load_onnx" in signature.parameters:
         init_kwargs["load_onnx"] = False
     if "load_trt" in signature.parameters:
@@ -693,7 +713,9 @@ def create_cosyvoice_tts() -> TextToSpeech:
     if "device" in signature.parameters:
         init_kwargs["device"] = device
     model = CosyVoice(str(TTS_MODEL_DIR), **init_kwargs)
+    load_cosyvoice_jit_modules(model)
     tune_cosyvoice_streaming(model)
+    tune_cosyvoice_flow_steps(model)
     available_spks = list(getattr(getattr(model, "frontend", None), "spk2info", {}).keys())
     if available_spks and COSYVOICE_SPK_ID not in available_spks:
         raise RuntimeError(
@@ -701,6 +723,35 @@ def create_cosyvoice_tts() -> TextToSpeech:
             f"Available speakers: {', '.join(available_spks)}"
         )
     return CosyVoiceTTS(model)
+
+
+def load_cosyvoice_jit_modules(model: Any) -> None:
+    if not COSYVOICE_LOAD_JIT:
+        return
+
+    import torch
+
+    inner_model = getattr(model, "model", None)
+    if inner_model is None:
+        return
+
+    inner_model.llm.text_encoder = torch.jit.load(
+        str(TTS_MODEL_DIR / "llm.text_encoder.fp16.zip"),
+        map_location=inner_model.device,
+    )
+    inner_model.flow.encoder = torch.jit.load(
+        str(TTS_MODEL_DIR / "flow.encoder.fp16.zip"),
+        map_location=inner_model.device,
+    )
+    log("CosyVoice fp16 JIT loaded: llm.text_encoder, flow.encoder")
+
+
+def init_cosyvoice_tensorrt_plugins() -> None:
+    import tensorrt as trt
+
+    logger = trt.Logger(trt.Logger.WARNING)
+    trt.init_libnvinfer_plugins(logger, "")
+    log("CosyVoice TensorRT plugins initialized")
 
 
 def tune_cosyvoice_streaming(model: Any) -> None:
@@ -714,6 +765,12 @@ def tune_cosyvoice_streaming(model: Any) -> None:
             inner_model.token_min_hop_len = COSYVOICE_STREAM_TOKEN_HOP_LEN
         if hasattr(inner_model, "token_max_hop_len"):
             inner_model.token_max_hop_len = max(COSYVOICE_STREAM_TOKEN_HOP_LEN, COSYVOICE_STREAM_TOKEN_HOP_LEN * 2)
+    if COSYVOICE_STREAM_TOKEN_OVERLAP_LEN > 0 and hasattr(inner_model, "token_overlap_len"):
+        inner_model.token_overlap_len = COSYVOICE_STREAM_TOKEN_OVERLAP_LEN
+        sample_rate = int(getattr(model, "sample_rate", 22050) or 22050)
+        input_frame_rate = int(getattr(getattr(inner_model, "flow", None), "input_frame_rate", 50) or 50)
+        inner_model.mel_overlap_len = int(COSYVOICE_STREAM_TOKEN_OVERLAP_LEN / input_frame_rate * sample_rate / 256)
+        inner_model.mel_window = np.hamming(2 * inner_model.mel_overlap_len)
     if COSYVOICE_STREAM_SCALE_FACTOR > 0 and hasattr(inner_model, "stream_scale_factor"):
         inner_model.stream_scale_factor = COSYVOICE_STREAM_SCALE_FACTOR
     log(
@@ -721,8 +778,76 @@ def tune_cosyvoice_streaming(model: Any) -> None:
         f"token_hop_len={getattr(inner_model, 'token_hop_len', 'n/a')} "
         f"token_min_hop_len={getattr(inner_model, 'token_min_hop_len', 'n/a')} "
         f"token_max_hop_len={getattr(inner_model, 'token_max_hop_len', 'n/a')} "
+        f"token_overlap_len={getattr(inner_model, 'token_overlap_len', 'n/a')} "
+        f"mel_overlap_len={getattr(inner_model, 'mel_overlap_len', 'n/a')} "
         f"stream_scale_factor={getattr(inner_model, 'stream_scale_factor', 'n/a')}"
     )
+
+
+def tune_cosyvoice_flow_steps(model: Any) -> None:
+    if COSYVOICE_FLOW_STEPS <= 0:
+        raise RuntimeError("COSYVOICE_FLOW_STEPS must be greater than 0")
+    if COSYVOICE_FLOW_STEPS == 10:
+        return
+
+    inner_model = getattr(model, "model", None)
+    flow = getattr(inner_model, "flow", None)
+    if flow is None:
+        return
+
+    import torch
+    import torch.nn.functional as F
+    from cosyvoice.utils.mask import make_pad_mask
+
+    @torch.inference_mode()
+    def inference_with_configured_steps(
+        self: Any,
+        token: Any,
+        token_len: Any,
+        prompt_token: Any,
+        prompt_token_len: Any,
+        prompt_feat: Any,
+        prompt_feat_len: Any,
+        embedding: Any,
+        flow_cache: Any,
+    ) -> tuple[Any, Any]:
+        assert token.shape[0] == 1
+        embedding = F.normalize(embedding, dim=1)
+        embedding = self.spk_embed_affine_layer(embedding)
+
+        token_len1, token_len2 = prompt_token.shape[1], token.shape[1]
+        token, token_len = torch.concat([prompt_token, token], dim=1), prompt_token_len + token_len
+        mask = (~make_pad_mask(token_len)).unsqueeze(-1).to(embedding)
+        token = self.input_embedding(torch.clamp(token, min=0)) * mask
+
+        h, _ = self.encoder(token, token_len)
+        h = self.encoder_proj(h)
+        mel_len1 = prompt_feat.shape[1]
+        mel_len2 = int(token_len2 / self.input_frame_rate * 22050 / 256)
+        h, _ = self.length_regulator.inference(h[:, :token_len1], h[:, token_len1:], mel_len1, mel_len2, self.input_frame_rate)
+
+        conds = torch.zeros([1, mel_len1 + mel_len2, self.output_size], device=token.device).to(h.dtype)
+        conds[:, :mel_len1] = prompt_feat
+        conds = conds.transpose(1, 2)
+
+        mask = (~make_pad_mask(torch.tensor([mel_len1 + mel_len2]))).to(h)
+        if flow_cache is not None and flow_cache.shape[2] > h.shape[1]:
+            flow_cache = flow_cache[:, :, -h.shape[1]:, :]
+        feat, flow_cache = self.decoder(
+            mu=h.transpose(1, 2).contiguous(),
+            mask=mask.unsqueeze(1),
+            spks=embedding,
+            cond=conds,
+            n_timesteps=COSYVOICE_FLOW_STEPS,
+            prompt_len=mel_len1,
+            cache=flow_cache,
+        )
+        feat = feat[:, :, mel_len1:]
+        assert feat.shape[2] == mel_len2
+        return feat.float(), flow_cache
+
+    flow.inference = MethodType(inference_with_configured_steps, flow)
+    log(f"CosyVoice flow diffusion steps: {COSYVOICE_FLOW_STEPS}")
 
 
 def patch_cosyvoice_onnxruntime_provider() -> None:
@@ -871,6 +996,22 @@ def preload_tts_cache(voice: TextToSpeech, *texts: str) -> None:
     if isinstance(voice, CachedTextToSpeech):
         for text in texts:
             voice.preload(text)
+
+
+def warmup_tts(voice: TextToSpeech) -> None:
+    for text in TTS_WARMUP_TEXTS:
+        started = time.monotonic()
+        chunks = 0
+        bytes_total = 0
+        for chunk in voice.synthesize_pcm(text):
+            if chunk:
+                chunks += 1
+                bytes_total += len(chunk)
+        log(
+            "tts warmup: "
+            f"text_chars={len(text)} chunks={chunks} bytes={bytes_total} "
+            f"elapsed={time.monotonic() - started:.2f}s"
+        )
 
 
 def audio_chunk_bytes(chunk: Any) -> bytes:
@@ -1316,6 +1457,7 @@ def main() -> None:
     voice, tts_config = create_tts()
     log(f"{VOICE_TTS_ENGINE} TTS ready: sample_rate={voice.config.sample_rate}")
     preload_tts_cache(voice, WAKE_RESPONSE, SESSION_END_RESPONSE, SESSION_IDLE_RESPONSE)
+    warmup_tts(voice)
     log("loading low-power wake-word model only")
     kws = create_kws()
     stream = kws.create_stream()
