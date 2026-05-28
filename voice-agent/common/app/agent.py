@@ -885,9 +885,12 @@ def patch_cosyvoice_onnxruntime_provider() -> None:
 
 def install_cosyvoice_inference_stubs() -> None:
     import importlib
+    import importlib.machinery
+    import importlib.util
     import types
 
     install_torchaudio_stub()
+    install_wetext_stub()
 
     try:
         dataset_package = importlib.import_module("cosyvoice.dataset")
@@ -948,6 +951,30 @@ def install_cosyvoice_inference_stubs() -> None:
     sys.modules["matcha.utils.logging_utils"] = logging_utils
     sys.modules["matcha.utils.rich_utils"] = rich_utils
     sys.modules["matcha.utils.utils"] = utils
+
+
+def install_wetext_stub() -> None:
+    import importlib.machinery
+    import importlib.util
+    import types
+
+    if "wetext" in sys.modules or importlib.util.find_spec("wetext") is not None:
+        return
+    if COSYVOICE_TEXT_FRONTEND:
+        raise RuntimeError("COSYVOICE_TEXT_FRONTEND=1 requires wetext or ttsfrd in the speech image")
+
+    wetext = types.ModuleType("wetext")
+    wetext.__spec__ = importlib.machinery.ModuleSpec("wetext", loader=None)
+
+    class Normalizer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def normalize(self, text: str, *args: Any, **kwargs: Any) -> str:
+            return text
+
+    wetext.Normalizer = Normalizer
+    sys.modules["wetext"] = wetext
 
 
 def install_torchaudio_stub() -> None:

@@ -464,6 +464,7 @@ ensure_cosyvoice_fp16_jit() {
   python3 - "$TTS_MODEL_DIR" <<'PY'
 import importlib
 import importlib.machinery
+import importlib.util
 import os
 import sys
 import types
@@ -510,6 +511,7 @@ def install_torchaudio_stub():
 
 def install_cosyvoice_stubs():
     install_torchaudio_stub()
+    install_wetext_stub()
 
     try:
         dataset_package = importlib.import_module("cosyvoice.dataset")
@@ -571,6 +573,30 @@ def install_cosyvoice_stubs():
     sys.modules["matcha.utils.logging_utils"] = logging_utils
     sys.modules["matcha.utils.rich_utils"] = rich_utils
     sys.modules["matcha.utils.utils"] = utils
+
+
+def env_flag_enabled(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def install_wetext_stub():
+    if "wetext" in sys.modules or importlib.util.find_spec("wetext") is not None:
+        return
+    if env_flag_enabled(os.environ.get("COSYVOICE_TEXT_FRONTEND")):
+        raise RuntimeError("COSYVOICE_TEXT_FRONTEND=1 requires wetext or ttsfrd in the speech image")
+
+    wetext = types.ModuleType("wetext")
+    wetext.__spec__ = importlib.machinery.ModuleSpec("wetext", loader=None)
+
+    class Normalizer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def normalize(self, text, *args, **kwargs):
+            return text
+
+    wetext.Normalizer = Normalizer
+    sys.modules["wetext"] = wetext
 
 
 def patch_onnxruntime_provider():
@@ -928,7 +954,6 @@ cosyvoice_runtime_ok() {
     && python_module_ok scipy \
     && python_module_ok regex \
     && python_module_ok modelscope \
-    && python_module_ok wetext \
     && python_module_ok cosyvoice.cli.cosyvoice \
     && python_module_ok matcha
 }
@@ -968,8 +993,7 @@ ensure_cosyvoice_runtime() {
     "scipy==1.10.1" \
     "sentencepiece" \
     "tiktoken==0.7.0" \
-    "transformers==4.45.2" \
-    "wetext==0.0.4"
+    "transformers==4.45.2"
   if [ ! -d "$COSYVOICE_CODE_DIR/cosyvoice" ]; then
     echo "[runtime] downloading CosyVoice code"
     rm -rf "$COSYVOICE_CODE_DIR"
