@@ -5,7 +5,7 @@
 - `ollama` 容器运行本地小模型；也可以在 `runtime.env` 切到任意 OpenAI-compatible 在线接口。
 - `chat2m-gateway` 容器提供 FastAPI 对话接口。
 - `chat2m-wake` 容器负责麦克风唤醒词监听。
-- `chat2m-speech` 容器负责离线 ASR、连续对话和本地 Piper TTS。
+- `chat2m-speech` 容器负责流式 ASR、连续对话和本地流式 TTS。
 - `chat2m-status` 容器负责把状态转发到 ESP32 显示屏。
 - `config/` 放默认配置模板；运行时配置会初始化到 `data/config/`。
 
@@ -154,11 +154,11 @@ OLLAMA_MODEL=qwen3:4b-instruct
 当前语音链路：
 
 - 唤醒监听：`chat2m-wake` 默认监听“嗨小江 / 嘿小江 / 小江”，用于提升实际唤醒稳定性。
-- ASR 输入：唤醒后使用 ReSpeaker Mic Array v3.0 处理后的采集音频和 sherpa-onnx streaming ASR，把识别文本 POST 到 `/chat`。
+- ASR 输入：唤醒后使用 ReSpeaker Mic Array v3.0 处理后的采集音频和 SenseVoice 流式 ASR，把识别文本 POST 到 `/chat`。
 - 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
-- TTS 输出：Piper 本地中文 `zh_CN-huayan-medium`，合成 PCM 后直接通过 ALSA 播放。
+- TTS 输出：CosyVoice 本地中文流式 TTS，合成 PCM 后直接通过 ALSA 播放。
 - 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒
@@ -170,9 +170,9 @@ docker compose up -d
 docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 ```
 
-默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 Piper 语速，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
+默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 CosyVoice 说话人/语速，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
 
-首次启动会自动检查唤醒、ASR 和 TTS 模型。模型关键文件可用则复用，不可用或为空会删除对应模型后重新下载。
+首次启动会按 `VOICE_ROLE`、`VOICE_ASR_ENGINE`、`VOICE_TTS_ENGINE` 安装当前组合需要的运行时依赖，再检查唤醒、ASR 和 TTS 模型。未选中的 ASR/TTS 依赖不会预装进镜像，也不会在运行时下载。
 
 ASR/TTS 模型不打进镜像，避免镜像本身过大。运行时只需要在 `data/config/runtime.env` 里选择引擎和模型：
 
@@ -183,16 +183,25 @@ VOICE_TTS_ENGINE=piper
 VOICE_TTS_MODEL=zh_CN-huayan-medium
 ```
 
+默认配置是：
+
+```env
+VOICE_ASR_ENGINE=sensevoice
+VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_TTS_ENGINE=cosyvoice
+VOICE_TTS_MODEL=CosyVoice-300M-SFT
+```
+
 目前内置可选项：
 
 ```env
 VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
 VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
-VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M
+VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT / CosyVoice-300M-Instruct
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。当前默认运行链路仍是 sherpa-onnx + Piper；切到 `sensevoice` 或 `cosyvoice` 会先完成对应模型的按需下载。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；运行时依赖也只按当前 env 组合安装。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

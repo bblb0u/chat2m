@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import inspect
 import os
 import re
 import threading
@@ -11,16 +12,14 @@ import time
 import wave
 from collections import deque
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Iterable, Protocol
 
 from app.runtime import DisplayClient, env_bool, env_float, env_int, env_value, log
 
 import httpx
 import numpy as np
-from piper.config import SynthesisConfig
-from piper.voice import PiperVoice
 import yaml
-import sherpa_onnx
 import sounddevice as sd
 
 
@@ -32,6 +31,10 @@ VOICE_TTS_MODEL = env_value("VOICE_TTS_MODEL")
 VOICE_TTS_ENGINE = env_value("VOICE_TTS_ENGINE")
 KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_ENGINE / VOICE_ASR_MODEL
+SENSEVOICE_MODEL_DIR = Path(os.getenv("SENSEVOICE_MODEL_DIR", str(ASR_MODEL_DIR)))
+SENSEVOICE_VAD_MODEL_DIR = Path(
+    os.getenv("SENSEVOICE_VAD_MODEL_DIR", str(MODELS_DIR / VOICE_ASR_ENGINE / "speech_fsmn_vad_zh-cn-16k-common-onnx"))
+)
 GENERATED_KEYWORDS_FILE = MODELS_DIR / "wake_words.txt"
 GENERATED_KEYWORDS_RAW = MODELS_DIR / "wake_words_raw.txt"
 HOTWORDS_PATH = Path("/app/config/hotwords.yaml")
@@ -97,6 +100,14 @@ PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
 PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
 PIPER_VOLUME = env_float("PIPER_VOLUME")
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
+TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
+COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文女"
+COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
+COSYVOICE_SPEED = env_float("COSYVOICE_SPEED")
+COSYVOICE_TEXT_FRONTEND = env_bool("COSYVOICE_TEXT_FRONTEND")
+COSYVOICE_LOAD_JIT = env_bool("COSYVOICE_LOAD_JIT")
+COSYVOICE_LOAD_TRT = env_bool("COSYVOICE_LOAD_TRT")
+COSYVOICE_FP16 = env_bool("COSYVOICE_FP16")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 NO_COMMAND_RESPONSE = env_value("NO_COMMAND_RESPONSE")
@@ -125,6 +136,30 @@ LLM_ROUTE_CACHE = {
     "updated_at": 0.0,
 }
 LLM_ROUTE_CACHE_LOCK = threading.Lock()
+
+
+class StreamingRecognizer(Protocol):
+    def create_stream(self) -> Any:
+        ...
+
+    def accept_waveform(self, stream: Any, sample_rate: int, samples: np.ndarray) -> None:
+        ...
+
+    def input_finished(self, stream: Any) -> None:
+        ...
+
+    def decode_ready(self, stream: Any) -> str:
+        ...
+
+    def is_endpoint(self, stream: Any) -> bool:
+        ...
+
+
+class TextToSpeech(Protocol):
+    config: Any
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        ...
 
 
 def require_file(path: Path) -> None:
@@ -193,7 +228,9 @@ def ensure_keywords_file() -> Path:
     return keywords_file
 
 
-def create_kws() -> sherpa_onnx.KeywordSpotter:
+def create_kws() -> Any:
+    import sherpa_onnx
+
     keywords_file = ensure_keywords_file()
     require_file(KWS_MODEL_DIR / "encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx")
     require_file(KWS_MODEL_DIR / "decoder-epoch-13-avg-2-chunk-8-left-64.onnx")
@@ -222,6 +259,8 @@ def asr_model_file(stem: str) -> Path:
 
 
 def ensure_hotwords_file() -> str:
+    import sherpa_onnx
+
     if not HOTWORDS_PATH.is_file():
         raise FileNotFoundError(f"missing hotwords file: {HOTWORDS_PATH}")
 
@@ -259,7 +298,71 @@ def ensure_hotwords_file() -> str:
     return str(GENERATED_HOTWORDS_FILE)
 
 
-def create_asr() -> sherpa_onnx.OnlineRecognizer:
+class SherpaStreamingRecognizer:
+    def __init__(self, recognizer: Any) -> None:
+        self.recognizer = recognizer
+
+    def create_stream(self) -> Any:
+        return self.recognizer.create_stream()
+
+    def accept_waveform(self, stream: Any, sample_rate: int, samples: np.ndarray) -> None:
+        stream.accept_waveform(sample_rate, samples)
+
+    def input_finished(self, stream: Any) -> None:
+        stream.input_finished()
+
+    def decode_ready(self, stream: Any) -> str:
+        while self.recognizer.is_ready(stream):
+            self.recognizer.decode_stream(stream)
+        return str(self.recognizer.get_result(stream) or "").strip()
+
+    def is_endpoint(self, stream: Any) -> bool:
+        return bool(self.recognizer.is_endpoint(stream))
+
+
+class SenseVoiceStreamingRecognizer:
+    def __init__(self, model: Any) -> None:
+        self.model = model
+
+    def create_stream(self) -> dict[str, Any]:
+        from sense_voice_streaming_asr.sense_voice_streaming_asr import StreamingASREventType
+
+        stream: dict[str, Any] = {
+            "committed": "",
+            "partial": "",
+            "endpoint": False,
+        }
+
+        def on_event(event_type: Any, text: str) -> None:
+            if event_type == StreamingASREventType.FINAL_RESULT and text:
+                stream["committed"] = str(stream["committed"]) + text
+            elif event_type == StreamingASREventType.PARTIAL_RESULT:
+                stream["partial"] = text
+            elif event_type == StreamingASREventType.SPEECH_END:
+                stream["endpoint"] = True
+
+        self.model.set_on_event_callback(on_event)
+        return stream
+
+    def accept_waveform(self, stream: dict[str, Any], sample_rate: int, samples: np.ndarray) -> None:
+        if sample_rate != 16000:
+            raise RuntimeError("SenseVoice input must be 16 kHz; set AUDIO_SAMPLE_RATE=16000")
+        if samples.size:
+            self.model.accept_audio(np.asarray(samples, dtype=np.float32))
+
+    def input_finished(self, stream: dict[str, Any]) -> None:
+        self.model.finalize_utterance()
+
+    def decode_ready(self, stream: dict[str, Any]) -> str:
+        return (str(stream.get("committed") or "") + str(stream.get("partial") or "")).strip()
+
+    def is_endpoint(self, stream: dict[str, Any]) -> bool:
+        return bool(stream.get("endpoint", False))
+
+
+def create_sherpa_asr() -> StreamingRecognizer:
+    import sherpa_onnx
+
     require_file(ASR_MODEL_DIR / "tokens.txt")
     encoder = asr_model_file("encoder-epoch-99-avg-1")
     decoder = asr_model_file("decoder-epoch-99-avg-1")
@@ -275,7 +378,7 @@ def create_asr() -> sherpa_onnx.OnlineRecognizer:
         f"max_active_paths={ASR_MAX_ACTIVE_PATHS} hotwords={HOTWORDS_PATH}"
     )
 
-    return sherpa_onnx.OnlineRecognizer.from_transducer(
+    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
         tokens=str(ASR_MODEL_DIR / "tokens.txt"),
         encoder=str(encoder),
         decoder=str(decoder),
@@ -295,6 +398,105 @@ def create_asr() -> sherpa_onnx.OnlineRecognizer:
         bpe_vocab=str(bpe_vocab) if bpe_vocab.is_file() else "",
         provider="cpu",
     )
+    return SherpaStreamingRecognizer(recognizer)
+
+
+def create_sensevoice_asr() -> StreamingRecognizer:
+    import json
+
+    import kaldi_native_fbank as knf
+    import onnxruntime
+    from sense_voice_streaming_asr.cmvn_utils import load_cmvn
+    from sense_voice_streaming_asr.model_data import SenseVoiceModel, VadModel
+    from sense_voice_streaming_asr.sense_voice_streaming_asr import SenseVoiceStreamingASR, StreamingASRConfig
+
+    require_file(SENSEVOICE_MODEL_DIR / "model_quant.onnx")
+    require_file(SENSEVOICE_MODEL_DIR / "am.mvn")
+    require_file(SENSEVOICE_MODEL_DIR / "tokens.json")
+    require_file(SENSEVOICE_VAD_MODEL_DIR / "model_quant.onnx")
+    vad_cmvn_path = SENSEVOICE_VAD_MODEL_DIR / "vad.mvn"
+    if not vad_cmvn_path.is_file():
+        vad_cmvn_path = SENSEVOICE_VAD_MODEL_DIR / "am.mvn"
+    require_file(vad_cmvn_path)
+
+    use_cuda = os.getenv("VOICE_ASR_DEVICE", "cpu").lower().startswith("cuda")
+    config = StreamingASRConfig(
+        lang=os.getenv("SENSEVOICE_LANGUAGE", "auto"),
+        itn_min_speech_time_ms=env_int("SENSEVOICE_ITN_MIN_SPEECH_MS"),
+        vad_start_threshold=env_float("SENSEVOICE_VAD_START_THRESHOLD"),
+        vad_end_threshold=env_float("SENSEVOICE_VAD_END_THRESHOLD"),
+        vad_start_persistence_ms=env_int("SENSEVOICE_VAD_START_PERSISTENCE_MS"),
+        vad_end_persistence_ms=env_int("SENSEVOICE_VAD_END_PERSISTENCE_MS"),
+        vad_start_padding_ms=env_int("SENSEVOICE_VAD_START_PADDING_MS"),
+        asr_result_trigger_buffer_ms=env_int("SENSEVOICE_ASR_TRIGGER_BUFFER_MS"),
+        asr_result_update_interval_ms=env_int("SENSEVOICE_ASR_UPDATE_INTERVAL_MS"),
+    )
+    log(
+        "SenseVoice streaming ASR config: "
+        f"model={SENSEVOICE_MODEL_DIR} vad={SENSEVOICE_VAD_MODEL_DIR} cuda={use_cuda} lang={config.lang} "
+        f"vad_start={config.vad_start_threshold} vad_end={config.vad_end_threshold}"
+    )
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if use_cuda else ["CPUExecutionProvider"]
+
+    def make_fbank_options() -> Any:
+        fbank_opts = knf.FbankOptions()
+        fbank_opts.frame_opts.samp_freq = 16000
+        fbank_opts.frame_opts.dither = 0.0
+        fbank_opts.frame_opts.window_type = "hamming"
+        fbank_opts.frame_opts.frame_shift_ms = 10
+        fbank_opts.frame_opts.frame_length_ms = 25
+        fbank_opts.mel_opts.num_bins = 80
+        fbank_opts.energy_floor = 0
+        fbank_opts.frame_opts.snip_edges = True
+        fbank_opts.mel_opts.debug_mel = False
+        return fbank_opts
+
+    asr_model = SenseVoiceModel.__new__(SenseVoiceModel)
+    asr_model.cmvn = load_cmvn(str(SENSEVOICE_MODEL_DIR / "am.mvn"))
+    asr_model.sensevoice_tokens = json.loads((SENSEVOICE_MODEL_DIR / "tokens.json").read_text(encoding="utf-8"))
+    asr_model.model_inference_session = onnxruntime.InferenceSession(
+        str(SENSEVOICE_MODEL_DIR / "model_quant.onnx"),
+        providers=providers,
+    )
+    asr_model.fbank_opts = make_fbank_options()
+    asr_model.lfr_m = 7
+    asr_model.lfr_n = 6
+    asr_model.textnorm_dict = {"withitn": 14, "woitn": 15}
+    asr_model.lid_dict = {
+        "auto": 0,
+        "zh": 3,
+        "en": 4,
+        "yue": 7,
+        "ja": 11,
+        "ko": 12,
+        "nospeech": 13,
+    }
+
+    vad_model = VadModel.__new__(VadModel)
+    vad_model.cmvn = load_cmvn(str(vad_cmvn_path))
+    vad_model.model_inference_session = onnxruntime.InferenceSession(
+        str(SENSEVOICE_VAD_MODEL_DIR / "model_quant.onnx"),
+        providers=["CPUExecutionProvider"],
+    )
+    vad_model.fbank_opts = make_fbank_options()
+    vad_model.lfr_m = 5
+    vad_model.lfr_n = 1
+    vad_model.vad_cache = [np.zeros((1, 128, 19, 1), dtype=np.float32) for _ in range(4)]
+
+    model = SenseVoiceStreamingASR(
+        asr_model=asr_model,
+        vad_model=vad_model,
+        config=config,
+    )
+    return SenseVoiceStreamingRecognizer(model)
+
+
+def create_asr() -> StreamingRecognizer:
+    if VOICE_ASR_ENGINE == "sherpa":
+        return create_sherpa_asr()
+    if VOICE_ASR_ENGINE == "sensevoice":
+        return create_sensevoice_asr()
+    raise RuntimeError(f"VOICE_ASR_ENGINE '{VOICE_ASR_ENGINE}' is not supported")
 
 
 def write_beep(path: Path) -> None:
@@ -318,7 +520,45 @@ def play_wav(path: Path) -> None:
         log(f"aplay is unavailable: {exc}")
 
 
-def create_tts() -> tuple[PiperVoice, SynthesisConfig]:
+class PiperTTS:
+    def __init__(self, voice: Any, config: Any) -> None:
+        self.voice = voice
+        self.piper_config = config
+        self.config = voice.config
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        for chunk in self.voice.synthesize(text, self.piper_config):
+            yield audio_chunk_bytes(chunk)
+
+
+class CosyVoiceTTS:
+    def __init__(self, model: Any) -> None:
+        self.model = model
+        sample_rate = int(getattr(model, "sample_rate", 22050) or 22050)
+        self.config = SimpleNamespace(sample_rate=sample_rate)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        kwargs = {
+            "stream": True,
+            "speed": COSYVOICE_SPEED,
+            "text_frontend": COSYVOICE_TEXT_FRONTEND,
+        }
+        if VOICE_TTS_MODEL.endswith("-Instruct"):
+            chunks = self.model.inference_instruct(text, COSYVOICE_SPK_ID, COSYVOICE_INSTRUCT_TEXT, **kwargs)
+        elif VOICE_TTS_MODEL.endswith("-SFT"):
+            chunks = self.model.inference_sft(text, COSYVOICE_SPK_ID, **kwargs)
+        else:
+            raise RuntimeError("use CosyVoice-300M-SFT or CosyVoice-300M-Instruct")
+
+        for chunk in chunks:
+            speech = chunk.get("tts_speech") if isinstance(chunk, dict) else chunk
+            yield tensor_audio_bytes(speech)
+
+
+def create_piper_tts() -> TextToSpeech:
+    from piper.config import SynthesisConfig
+    from piper.voice import PiperVoice
+
     require_file(PIPER_MODEL)
     require_file(PIPER_CONFIG)
     voice = PiperVoice.load(PIPER_MODEL, config_path=PIPER_CONFIG)
@@ -329,7 +569,119 @@ def create_tts() -> tuple[PiperVoice, SynthesisConfig]:
         noise_w_scale=PIPER_NOISE_W_SCALE,
         volume=PIPER_VOLUME,
     )
-    return voice, config
+    return PiperTTS(voice, config)
+
+
+def create_cosyvoice_tts() -> TextToSpeech:
+    cosyvoice_package = os.getenv("COSYVOICE_PACKAGE_PATH", "").strip()
+    if cosyvoice_package:
+        for path in reversed([part.strip() for part in cosyvoice_package.split(":") if part.strip()]):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+    from cosyvoice.cli.cosyvoice import CosyVoice
+
+    require_file(TTS_MODEL_DIR / "cosyvoice.yaml")
+    require_file(TTS_MODEL_DIR / "flow.pt")
+    require_file(TTS_MODEL_DIR / "hift.pt")
+    require_file(TTS_MODEL_DIR / "llm.pt")
+    require_file(TTS_MODEL_DIR / "campplus.onnx")
+    require_file(TTS_MODEL_DIR / "speech_tokenizer_v1.onnx")
+    if VOICE_TTS_MODEL.endswith(("-SFT", "-Instruct")):
+        require_file(TTS_MODEL_DIR / "spk2info.pt")
+    device = os.getenv("VOICE_TTS_DEVICE", "cpu")
+    log(
+        "CosyVoice TTS config: "
+        f"model={TTS_MODEL_DIR} device={device} speaker={COSYVOICE_SPK_ID} "
+        f"jit={COSYVOICE_LOAD_JIT} trt={COSYVOICE_LOAD_TRT} fp16={COSYVOICE_FP16}"
+    )
+    init_kwargs: dict[str, Any] = {}
+    signature = inspect.signature(CosyVoice)
+    if "load_jit" in signature.parameters:
+        init_kwargs["load_jit"] = COSYVOICE_LOAD_JIT
+    if "load_onnx" in signature.parameters:
+        init_kwargs["load_onnx"] = False
+    if "load_trt" in signature.parameters:
+        init_kwargs["load_trt"] = COSYVOICE_LOAD_TRT
+    if "fp16" in signature.parameters:
+        init_kwargs["fp16"] = COSYVOICE_FP16
+    if "device" in signature.parameters:
+        init_kwargs["device"] = device
+    install_cosyvoice_inference_stubs()
+    model = CosyVoice(str(TTS_MODEL_DIR), **init_kwargs)
+    return CosyVoiceTTS(model)
+
+
+def install_cosyvoice_inference_stubs() -> None:
+    import importlib
+    import types
+
+    try:
+        dataset_package = importlib.import_module("cosyvoice.dataset")
+    except Exception:
+        return
+
+    processor = types.ModuleType("cosyvoice.dataset.processor")
+
+    def unused_processor(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("CosyVoice dataset processor is not available in inference runtime")
+
+    for name in (
+        "parquet_opener",
+        "tokenize",
+        "filter",
+        "resample",
+        "compute_fbank",
+        "parse_embedding",
+        "shuffle",
+        "sort",
+        "batch",
+        "padding",
+    ):
+        setattr(processor, name, unused_processor)
+    sys.modules["cosyvoice.dataset.processor"] = processor
+    setattr(dataset_package, "processor", processor)
+
+    pylogger = types.ModuleType("matcha.utils.pylogger")
+
+    def get_pylogger(name: str = __name__) -> Any:
+        import logging
+
+        return logging.getLogger(name)
+
+    pylogger.get_pylogger = get_pylogger
+    sys.modules["matcha.utils.pylogger"] = pylogger
+
+    def noop(*args: Any, **kwargs: Any) -> Any:
+        return None
+
+    instantiators = types.ModuleType("matcha.utils.instantiators")
+    instantiators.instantiate_callbacks = lambda *args, **kwargs: []
+    instantiators.instantiate_loggers = lambda *args, **kwargs: []
+
+    logging_utils = types.ModuleType("matcha.utils.logging_utils")
+    logging_utils.log_hyperparameters = noop
+
+    rich_utils = types.ModuleType("matcha.utils.rich_utils")
+    rich_utils.enforce_tags = noop
+    rich_utils.print_config_tree = noop
+
+    utils = types.ModuleType("matcha.utils.utils")
+    utils.extras = noop
+    utils.get_metric_value = lambda *args, **kwargs: 0.0
+    utils.task_wrapper = lambda func: func
+
+    sys.modules["matcha.utils.instantiators"] = instantiators
+    sys.modules["matcha.utils.logging_utils"] = logging_utils
+    sys.modules["matcha.utils.rich_utils"] = rich_utils
+    sys.modules["matcha.utils.utils"] = utils
+
+
+def create_tts() -> tuple[TextToSpeech, None]:
+    if VOICE_TTS_ENGINE == "piper":
+        return create_piper_tts(), None
+    if VOICE_TTS_ENGINE == "cosyvoice":
+        return create_cosyvoice_tts(), None
+    raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
 
 
 def audio_chunk_bytes(chunk: Any) -> bytes:
@@ -345,10 +697,23 @@ def audio_chunk_bytes(chunk: Any) -> bytes:
     return (clipped * 32767.0).astype(np.int16).tobytes()
 
 
-def speak(text: str, voice: PiperVoice, config: SynthesisConfig) -> None:
+def tensor_audio_bytes(audio: Any) -> bytes:
+    try:
+        import torch
+
+        if isinstance(audio, torch.Tensor):
+            audio = audio.detach().cpu().float().numpy()
+    except Exception:
+        pass
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    clipped = np.clip(samples, -1.0, 1.0)
+    return (clipped * 32767.0).astype(np.int16).tobytes()
+
+
+def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
     if not text:
         return
-    log(f"piper tts: speaker={PIPER_SPEAKER} text={text}")
+    log(f"{VOICE_TTS_ENGINE} tts: text={text}")
     command = [
         "aplay",
         "-q",
@@ -366,8 +731,9 @@ def speak(text: str, voice: PiperVoice, config: SynthesisConfig) -> None:
     with subprocess.Popen(command, stdin=subprocess.PIPE) as player:
         assert player.stdin is not None
         try:
-            for chunk in voice.synthesize(text, config):
-                player.stdin.write(audio_chunk_bytes(chunk))
+            for chunk in voice.synthesize_pcm(text):
+                if chunk:
+                    player.stdin.write(chunk)
         finally:
             player.stdin.close()
         return_code = player.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
@@ -378,8 +744,8 @@ def speak(text: str, voice: PiperVoice, config: SynthesisConfig) -> None:
 def speak_pausing_input(
     audio: sd.InputStream,
     text: str,
-    voice: PiperVoice,
-    config: SynthesisConfig,
+    voice: TextToSpeech,
+    config: Any,
     display: DisplayClient,
 ) -> None:
     if not text:
@@ -422,19 +788,17 @@ def audio_rms(samples: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(samples)))) if samples.size else 0.0
 
 
-def decode_ready_asr(recognizer: sherpa_onnx.OnlineRecognizer, stream: Any) -> str:
-    while recognizer.is_ready(stream):
-        recognizer.decode_stream(stream)
-    return str(recognizer.get_result(stream) or "").strip()
+def decode_ready_asr(recognizer: StreamingRecognizer, stream: Any) -> str:
+    return recognizer.decode_ready(stream)
 
 
 def feed_asr(
-    recognizer: sherpa_onnx.OnlineRecognizer,
+    recognizer: StreamingRecognizer,
     stream: Any,
     samples: np.ndarray,
     last_text: str,
 ) -> str:
-    stream.accept_waveform(SAMPLE_RATE, samples)
+    recognizer.accept_waveform(stream, SAMPLE_RATE, samples)
     result = decode_ready_asr(recognizer, stream)
     if result and result != last_text:
         log(f"asr partial: {result}")
@@ -465,7 +829,7 @@ def calibrate_asr_noise(audio: sd.InputStream, frames: int) -> tuple[float, list
 def listen_command(
     audio: sd.InputStream,
     ready_beep_path: Path | None,
-    recognizer: sherpa_onnx.OnlineRecognizer,
+    recognizer: StreamingRecognizer,
     play_ready_beep: bool = True,
 ) -> str:
     stream = recognizer.create_stream()
@@ -524,7 +888,7 @@ def listen_command(
         if recognizer.is_endpoint(stream) and (speech_started or last_text):
             break
 
-    stream.input_finished()
+    recognizer.input_finished(stream)
     final_text = (decode_ready_asr(recognizer, stream) or last_text).strip()
     del stream
     gc.collect()
@@ -610,8 +974,8 @@ def is_session_end(command: str) -> bool:
 def handle_conversation_turn(
     audio: sd.InputStream,
     command: str,
-    voice: PiperVoice,
-    tts_config: SynthesisConfig,
+    voice: TextToSpeech,
+    tts_config: Any,
     display: DisplayClient,
     llm_route: str | None = None,
 ) -> bool:
@@ -645,9 +1009,9 @@ def handle_conversation_turn(
 def handle_wake(
     audio: sd.InputStream,
     beep_path: Path,
-    recognizer: sherpa_onnx.OnlineRecognizer,
-    voice: PiperVoice,
-    tts_config: SynthesisConfig,
+    recognizer: StreamingRecognizer,
+    voice: TextToSpeech,
+    tts_config: Any,
     display: DisplayClient,
 ) -> None:
     log("wake detected")
@@ -691,13 +1055,9 @@ def main() -> None:
     log(f"display serial: {DISPLAY_SERIAL_PORT or 'disabled'}")
     display.set_state("idle")
     log(f"input channels: {INPUT_CHANNELS}, selected channel: {INPUT_CHANNEL_INDEX}")
-    log(f"loading Piper TTS model: {PIPER_MODEL}")
+    log(f"loading {VOICE_TTS_ENGINE} TTS model: {TTS_MODEL_DIR if VOICE_TTS_ENGINE == 'cosyvoice' else PIPER_MODEL}")
     voice, tts_config = create_tts()
-    log(
-        "Piper TTS ready: "
-        f"sample_rate={voice.config.sample_rate} speaker={PIPER_SPEAKER} "
-        f"length_scale={PIPER_LENGTH_SCALE}"
-    )
+    log(f"{VOICE_TTS_ENGINE} TTS ready: sample_rate={voice.config.sample_rate}")
     log("loading low-power wake-word model only")
     kws = create_kws()
     stream = kws.create_stream()

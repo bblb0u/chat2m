@@ -17,7 +17,6 @@ RUN apt-get update \
       portaudio19-dev \
       python3 \
       python3-pip \
-      python3-sentencepiece \
     && rm -rf /var/lib/apt/lists/*
 
 COPY voice-agent/requirements.txt .
