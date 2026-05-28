@@ -12,6 +12,8 @@ RUN apt-get update \
       ca-certificates \
       curl \
       libasound2 \
+      libgomp1 \
+      libopenblas-base \
       libportaudio2 \
       libusb-1.0-0 \
       portaudio19-dev \
@@ -20,7 +22,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY voice-agent/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir "sherpa-onnx==1.12.38"
 
 COPY config /defaults/config
 COPY voice-agent/entrypoint.sh /entrypoint.sh
