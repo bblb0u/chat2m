@@ -472,6 +472,83 @@ ensure_apt_packages() {
   rm -rf /var/lib/apt/lists/*
 }
 
+ensure_jetson_apt_sources() {
+  if [ ! -f /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]; then
+    echo "[runtime] adding NVIDIA Jetson apt sources"
+    curl -fsSL --retry 5 --connect-timeout 20 https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
+      -o /etc/apt/trusted.gpg.d/jetson-ota-public.asc
+    jetson_platform="${JETSON_L4T_PLATFORM:-t234}"
+    cat > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list <<'EOF'
+deb https://repo.download.nvidia.com/jetson/common r35.6 main
+EOF
+    printf 'deb https://repo.download.nvidia.com/jetson/%s r35.6 main\n' "$jetson_platform" \
+      >> /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
+  fi
+}
+
+ensure_jetson_cuda_runtime() {
+  ensure_jetson_apt_sources
+  ensure_apt_packages \
+    cuda-cudart-11-4 \
+    libcublas-11-4 \
+    libcufft-11-4 \
+    libcudnn8 \
+    libcurand-11-4 \
+    libcusolver-11-4 \
+    libcusparse-11-4 \
+    libnpp-11-4
+}
+
+verify_torch_cuda_runtime() {
+  python3 <<'PY'
+import sys
+
+try:
+    import torch
+except Exception as exc:
+    print(f"torch import failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not torch.cuda.is_available():
+    print(f"torch cuda unavailable: torch={torch.__version__} cuda={getattr(torch.version, 'cuda', None)}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"[runtime] torch cuda ready: torch={torch.__version__} cuda={torch.version.cuda} devices={torch.cuda.device_count()}")
+PY
+}
+
+cosyvoice_cuda_requested() {
+  case "$(normalize_key "${VOICE_TTS_DEVICE:-auto}")" in
+    cuda|gpu|cuda:*) return 0 ;;
+    auto)
+      [ -e /dev/nvidiactl ] || [ -e /dev/nvhost-gpu ] || return 1
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+install_cosyvoice_torch() {
+  if cosyvoice_cuda_requested; then
+    ensure_jetson_cuda_runtime
+    if verify_torch_cuda_runtime; then
+      return
+    fi
+    install_python_packages \
+      "Jetson CUDA PyTorch" \
+      "--index-url" "${JETSON_PYTORCH_INDEX_URL:-https://pypi.jetson-ai-lab.dev/jp5/cu114}" \
+      "torch==${JETSON_TORCH_VERSION:-2.2.0}" \
+      "torchaudio==${JETSON_TORCHAUDIO_VERSION:-2.2.0}"
+    verify_torch_cuda_runtime
+    return
+  fi
+
+  install_python_packages \
+    "PyTorch CPU" \
+    "torch==${COSYVOICE_TORCH_VERSION:-2.3.1}" \
+    "torchaudio==${COSYVOICE_TORCHAUDIO_VERSION:-2.3.1}"
+}
+
 ensure_kws_runtime() {
   if python_module_ok sherpa_onnx && command -v sherpa-onnx-cli >/dev/null 2>&1; then
     return
@@ -501,7 +578,7 @@ ensure_sensevoice_runtime() {
   if sensevoice_runtime_ok; then
     return
   fi
-  install_python_packages "SenseVoice streaming ASR" "sense-voice-streaming-asr==0.1.1" "onnxruntime" "sentencepiece"
+  install_python_packages "SenseVoice streaming ASR" "sense-voice-streaming-asr==0.1.1" "onnxruntime==1.18.0" "sentencepiece"
 }
 
 cosyvoice_runtime_ok() {
@@ -531,14 +608,17 @@ ensure_cosyvoice_runtime() {
   if [ -d "$COSYVOICE_CODE_DIR/cosyvoice" ] \
     && [ -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ] \
     && cosyvoice_runtime_ok; then
+    if cosyvoice_cuda_requested; then
+      ensure_jetson_cuda_runtime
+      verify_torch_cuda_runtime
+    fi
     return
   fi
 
   ensure_apt_packages git
+  install_cosyvoice_torch
   install_python_packages \
     "CosyVoice runtime" \
-    "torch==2.3.1" \
-    "torchaudio==2.3.1" \
     "onnxruntime==1.18.0" \
     "conformer==0.3.2" \
     "diffusers==0.29.0" \

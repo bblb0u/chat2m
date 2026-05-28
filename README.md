@@ -188,15 +188,19 @@ VOICE_TTS_MODEL=zh_CN-huayan-medium
 ```env
 VOICE_ASR_ENGINE=sensevoice
 VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_ASR_DEVICE=auto
 VOICE_TTS_ENGINE=piper
 VOICE_TTS_MODEL=zh_CN-huayan-medium
+VOICE_TTS_DEVICE=auto
 ```
 
-如果更看重音色质量、能接受 CPU 推理延迟，可显式切到 CosyVoice：
+如果更看重音色质量，可显式切到 CosyVoice。Jetson 上 `chat2m-speech` 会用 Docker `nvidia` runtime 启动；`VOICE_TTS_DEVICE=cuda` 时才按需安装 Jetson CUDA 版 PyTorch，并在 CUDA 不可用时直接报错，避免悄悄退回 CPU：
 
 ```env
 VOICE_TTS_ENGINE=cosyvoice
 VOICE_TTS_MODEL=CosyVoice-300M-SFT
+VOICE_TTS_DEVICE=cuda
+COSYVOICE_FP16=1
 ```
 
 目前内置可选项：
@@ -206,6 +210,8 @@ VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-b
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
 VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
 VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT / CosyVoice-300M-Instruct
+VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
+VOICE_TTS_DEVICE=auto       # auto / cpu / cuda
 ```
 
 下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；运行时依赖也只按当前 env 组合安装。

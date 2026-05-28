@@ -62,12 +62,16 @@ services:
     image: bblb0u/chat2m-speech:latest
     container_name: chat2m-speech
     restart: unless-stopped
+    runtime: nvidia
     devices:
       - /dev/snd:/dev/snd
       - /dev/bus/usb:/dev/bus/usb
     command: ["python3", "-m", "app.speech"]
     environment:
       VOICE_ROLE: chat2m-speech
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      LD_LIBRARY_PATH: /usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config

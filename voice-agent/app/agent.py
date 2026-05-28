@@ -105,6 +105,8 @@ TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
 TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
+VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
+VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "auto").strip().lower()
 COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文女"
 COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
 COSYVOICE_SPEED = env_float("COSYVOICE_SPEED")
@@ -419,7 +421,18 @@ def create_sensevoice_asr() -> StreamingRecognizer:
         vad_cmvn_path = SENSEVOICE_VAD_MODEL_DIR / "am.mvn"
     require_file(vad_cmvn_path)
 
-    use_cuda = os.getenv("VOICE_ASR_DEVICE", "cpu").lower().startswith("cuda")
+    available_providers = set(onnxruntime.get_available_providers())
+    cuda_provider_available = "CUDAExecutionProvider" in available_providers
+    if VOICE_ASR_DEVICE in {"cuda", "gpu"} or VOICE_ASR_DEVICE.startswith("cuda:"):
+        if not cuda_provider_available:
+            raise RuntimeError(
+                "VOICE_ASR_DEVICE=cuda was requested, but onnxruntime CUDAExecutionProvider is not available"
+            )
+        use_cuda = True
+    elif VOICE_ASR_DEVICE == "auto":
+        use_cuda = cuda_provider_available
+    else:
+        use_cuda = False
     config = StreamingASRConfig(
         lang=os.getenv("SENSEVOICE_LANGUAGE", "auto"),
         itn_min_speech_time_ms=env_int("SENSEVOICE_ITN_MIN_SPEECH_MS"),
@@ -433,7 +446,9 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     )
     log(
         "SenseVoice streaming ASR config: "
-        f"model={SENSEVOICE_MODEL_DIR} vad={SENSEVOICE_VAD_MODEL_DIR} cuda={use_cuda} lang={config.lang} "
+        f"model={SENSEVOICE_MODEL_DIR} vad={SENSEVOICE_VAD_MODEL_DIR} "
+        f"device={VOICE_ASR_DEVICE} cuda={use_cuda} providers={','.join(onnxruntime.get_available_providers())} "
+        f"lang={config.lang} "
         f"vad_start={config.vad_start_threshold} vad_end={config.vad_end_threshold}"
     )
     providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if use_cuda else ["CPUExecutionProvider"]
@@ -621,6 +636,7 @@ def create_cosyvoice_tts() -> TextToSpeech:
         for path in reversed([part.strip() for part in cosyvoice_package.split(":") if part.strip()]):
             if path not in sys.path:
                 sys.path.insert(0, path)
+    import torch
     from cosyvoice.cli.cosyvoice import CosyVoice
 
     require_file(TTS_MODEL_DIR / "cosyvoice.yaml")
@@ -631,10 +647,22 @@ def create_cosyvoice_tts() -> TextToSpeech:
     require_file(TTS_MODEL_DIR / "speech_tokenizer_v1.onnx")
     if VOICE_TTS_MODEL.endswith(("-SFT", "-Instruct")):
         require_file(TTS_MODEL_DIR / "spk2info.pt")
-    device = os.getenv("VOICE_TTS_DEVICE", "cpu")
+    cuda_available = torch.cuda.is_available()
+    if VOICE_TTS_DEVICE in {"cuda", "gpu"} or VOICE_TTS_DEVICE.startswith("cuda:"):
+        if not cuda_available:
+            raise RuntimeError(
+                f"VOICE_TTS_DEVICE={VOICE_TTS_DEVICE} was requested, "
+                f"but torch cuda is not available: torch={torch.__version__} cuda={torch.version.cuda}"
+            )
+        device = VOICE_TTS_DEVICE
+    elif VOICE_TTS_DEVICE == "auto":
+        device = "cuda" if cuda_available else "cpu"
+    else:
+        device = "cpu"
     log(
         "CosyVoice TTS config: "
-        f"model={TTS_MODEL_DIR} device={device} speaker={COSYVOICE_SPK_ID} "
+        f"model={TTS_MODEL_DIR} device={device} torch={torch.__version__} cuda={torch.version.cuda} "
+        f"cuda_available={cuda_available} speaker={COSYVOICE_SPK_ID} "
         f"jit={COSYVOICE_LOAD_JIT} trt={COSYVOICE_LOAD_TRT} fp16={COSYVOICE_FP16}"
     )
     init_kwargs: dict[str, Any] = {}
