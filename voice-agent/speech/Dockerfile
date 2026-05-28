@@ -26,6 +26,7 @@ RUN apt-get update \
       libusb-1.0-0 \
       portaudio19-dev \
       python3 \
+      python3-dev \
       python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
