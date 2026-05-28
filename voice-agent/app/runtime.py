@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -31,6 +32,14 @@ def load_runtime_env() -> None:
 
 
 load_runtime_env()
+
+
+def quiet_http_client_logging() -> None:
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
+quiet_http_client_logging()
 
 
 def env_value(key: str, *, allow_empty: bool = False) -> str:
