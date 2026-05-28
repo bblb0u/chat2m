@@ -11,6 +11,7 @@ import tempfile
 import time
 import wave
 from collections import deque
+from itertools import chain
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterable, Protocol
@@ -28,7 +29,7 @@ VOICE_KWS_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 VOICE_ASR_ENGINE = env_value("VOICE_ASR_ENGINE")
 VOICE_ASR_MODEL = env_value("VOICE_ASR_MODEL")
 VOICE_TTS_MODEL = env_value("VOICE_TTS_MODEL")
-VOICE_TTS_ENGINE = env_value("VOICE_TTS_ENGINE")
+VOICE_TTS_ENGINE = env_value("VOICE_TTS_ENGINE").strip().lower()
 KWS_MODEL_DIR = MODELS_DIR / VOICE_KWS_MODEL
 ASR_MODEL_DIR = MODELS_DIR / VOICE_ASR_ENGINE / VOICE_ASR_MODEL
 SENSEVOICE_MODEL_DIR = Path(os.getenv("SENSEVOICE_MODEL_DIR", str(ASR_MODEL_DIR)))
@@ -104,6 +105,8 @@ SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
 TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
 TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
+TTS_PLAYBACK_MODE = os.getenv("TTS_PLAYBACK_MODE", "stream").strip().lower()
+TTS_PREBUFFER_SECONDS = float(os.getenv("TTS_PREBUFFER_SECONDS", "2.4").strip() or "2.4")
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cuda").strip().lower()
@@ -114,6 +117,8 @@ COSYVOICE_TEXT_FRONTEND = env_bool("COSYVOICE_TEXT_FRONTEND")
 COSYVOICE_LOAD_JIT = env_bool("COSYVOICE_LOAD_JIT")
 COSYVOICE_LOAD_TRT = env_bool("COSYVOICE_LOAD_TRT")
 COSYVOICE_FP16 = env_bool("COSYVOICE_FP16")
+COSYVOICE_STREAM_TOKEN_HOP_LEN = int(os.getenv("COSYVOICE_STREAM_TOKEN_HOP_LEN", "20").strip() or "20")
+COSYVOICE_STREAM_SCALE_FACTOR = int(os.getenv("COSYVOICE_STREAM_SCALE_FACTOR", "1").strip() or "1")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 NO_COMMAND_RESPONSE = env_value("NO_COMMAND_RESPONSE")
@@ -409,8 +414,8 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     import kaldi_native_fbank as knf
     import onnxruntime
     from sense_voice_streaming_asr.cmvn_utils import load_cmvn
-    from sense_voice_streaming_asr.model_data import SenseVoiceModel, VadModel
     from sense_voice_streaming_asr.sense_voice_streaming_asr import SenseVoiceStreamingASR, StreamingASRConfig
+    from sense_voice_streaming_asr.model_data import SenseVoiceModel, VadModel
 
     require_file(SENSEVOICE_MODEL_DIR / "model_quant.onnx")
     require_file(SENSEVOICE_MODEL_DIR / "am.mvn")
@@ -638,6 +643,7 @@ def create_cosyvoice_tts() -> TextToSpeech:
                 sys.path.insert(0, path)
     import torch
     install_cosyvoice_inference_stubs()
+    patch_cosyvoice_onnxruntime_provider()
     from cosyvoice.cli.cosyvoice import CosyVoice
 
     require_file(TTS_MODEL_DIR / "cosyvoice.yaml")
@@ -657,6 +663,16 @@ def create_cosyvoice_tts() -> TextToSpeech:
             f"but CUDA is not available: device={VOICE_TTS_DEVICE} "
             f"torch={torch.__version__} cuda={torch.version.cuda}"
         )
+    if VOICE_TTS_DEVICE.startswith("cuda:"):
+        device_index = VOICE_TTS_DEVICE.split(":", 1)[1]
+        if not device_index.isdigit():
+            raise RuntimeError("VOICE_TTS_DEVICE must be auto, cuda, gpu, or cuda:<index> for CosyVoice")
+        if int(device_index) >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"VOICE_TTS_DEVICE={VOICE_TTS_DEVICE} is not available; "
+                f"torch sees {torch.cuda.device_count()} CUDA device(s)"
+            )
+        torch.cuda.set_device(int(device_index))
     device = "cuda" if VOICE_TTS_DEVICE in {"auto", "gpu"} else VOICE_TTS_DEVICE
     log(
         "CosyVoice TTS config: "
@@ -677,7 +693,59 @@ def create_cosyvoice_tts() -> TextToSpeech:
     if "device" in signature.parameters:
         init_kwargs["device"] = device
     model = CosyVoice(str(TTS_MODEL_DIR), **init_kwargs)
+    tune_cosyvoice_streaming(model)
+    available_spks = list(getattr(getattr(model, "frontend", None), "spk2info", {}).keys())
+    if available_spks and COSYVOICE_SPK_ID not in available_spks:
+        raise RuntimeError(
+            f"CosyVoice speaker '{COSYVOICE_SPK_ID}' is not available. "
+            f"Available speakers: {', '.join(available_spks)}"
+        )
     return CosyVoiceTTS(model)
+
+
+def tune_cosyvoice_streaming(model: Any) -> None:
+    inner_model = getattr(model, "model", None)
+    if inner_model is None:
+        return
+    if COSYVOICE_STREAM_TOKEN_HOP_LEN > 0:
+        if hasattr(inner_model, "token_hop_len"):
+            inner_model.token_hop_len = COSYVOICE_STREAM_TOKEN_HOP_LEN
+        if hasattr(inner_model, "token_min_hop_len"):
+            inner_model.token_min_hop_len = COSYVOICE_STREAM_TOKEN_HOP_LEN
+        if hasattr(inner_model, "token_max_hop_len"):
+            inner_model.token_max_hop_len = max(COSYVOICE_STREAM_TOKEN_HOP_LEN, COSYVOICE_STREAM_TOKEN_HOP_LEN * 2)
+    if COSYVOICE_STREAM_SCALE_FACTOR > 0 and hasattr(inner_model, "stream_scale_factor"):
+        inner_model.stream_scale_factor = COSYVOICE_STREAM_SCALE_FACTOR
+    log(
+        "CosyVoice streaming tune: "
+        f"token_hop_len={getattr(inner_model, 'token_hop_len', 'n/a')} "
+        f"token_min_hop_len={getattr(inner_model, 'token_min_hop_len', 'n/a')} "
+        f"token_max_hop_len={getattr(inner_model, 'token_max_hop_len', 'n/a')} "
+        f"stream_scale_factor={getattr(inner_model, 'stream_scale_factor', 'n/a')}"
+    )
+
+
+def patch_cosyvoice_onnxruntime_provider() -> None:
+    import onnxruntime
+
+    if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+        return
+    if getattr(onnxruntime.InferenceSession, "_chat2m_provider_patch", False):
+        return
+
+    original_inference_session = onnxruntime.InferenceSession
+
+    def inference_session(*args: Any, **kwargs: Any) -> Any:
+        providers = kwargs.get("providers")
+        if providers and "CUDAExecutionProvider" in providers:
+            kwargs["providers"] = [provider for provider in providers if provider != "CUDAExecutionProvider"]
+            if "CPUExecutionProvider" not in kwargs["providers"]:
+                kwargs["providers"].append("CPUExecutionProvider")
+        return original_inference_session(*args, **kwargs)
+
+    inference_session._chat2m_provider_patch = True
+    onnxruntime.InferenceSession = inference_session
+    log("CosyVoice ONNX frontend using CPUExecutionProvider; onnxruntime CUDAExecutionProvider is unavailable")
 
 
 def install_cosyvoice_inference_stubs() -> None:
@@ -748,6 +816,7 @@ def install_cosyvoice_inference_stubs() -> None:
 
 
 def install_torchaudio_stub() -> None:
+    import importlib.machinery
     import types
 
     if "torchaudio" in sys.modules:
@@ -757,6 +826,10 @@ def install_torchaudio_stub() -> None:
     compliance = types.ModuleType("torchaudio.compliance")
     kaldi = types.ModuleType("torchaudio.compliance.kaldi")
     transforms = types.ModuleType("torchaudio.transforms")
+    torchaudio.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
+    compliance.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance", loader=None)
+    kaldi.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance.kaldi", loader=None)
+    transforms.__spec__ = importlib.machinery.ModuleSpec("torchaudio.transforms", loader=None)
 
     def unavailable(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("torchaudio is not available in CosyVoice SFT inference runtime")
@@ -826,6 +899,30 @@ def tensor_audio_bytes(audio: Any) -> bytes:
     return (clipped * 32767.0).astype(np.int16).tobytes()
 
 
+def tts_playback_mode() -> str:
+    if TTS_PLAYBACK_MODE in {"buffered", "hybrid", "stream"}:
+        return TTS_PLAYBACK_MODE
+    raise RuntimeError("TTS_PLAYBACK_MODE must be buffered, hybrid, or stream")
+
+
+def write_player_stdin(player: subprocess.Popen[bytes], chunks: Iterable[bytes]) -> None:
+    assert player.stdin is not None
+    try:
+        for chunk in chunks:
+            if chunk:
+                player.stdin.write(chunk)
+    finally:
+        player.stdin.close()
+
+
+def play_pcm_chunks(command: list[str], chunks: Iterable[bytes]) -> None:
+    with subprocess.Popen(command, stdin=subprocess.PIPE) as player:
+        write_player_stdin(player, chunks)
+        return_code = player.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
+    if return_code != 0:
+        raise RuntimeError(f"aplay exited with status {return_code}")
+
+
 def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
     if not text:
         return
@@ -844,17 +941,36 @@ def speak(text: str, voice: TextToSpeech, config: Any = None) -> None:
         "-r",
         str(voice.config.sample_rate),
     ]
-    with subprocess.Popen(command, stdin=subprocess.PIPE) as player:
-        assert player.stdin is not None
-        try:
-            for chunk in voice.synthesize_pcm(text):
-                if chunk:
-                    player.stdin.write(chunk)
-        finally:
-            player.stdin.close()
-        return_code = player.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
-    if return_code != 0:
-        raise RuntimeError(f"aplay exited with status {return_code}")
+    mode = tts_playback_mode()
+    if mode == "buffered":
+        started = time.monotonic()
+        pcm = b"".join(chunk for chunk in voice.synthesize_pcm(text) if chunk)
+        duration = len(pcm) / max(1, voice.config.sample_rate * 2)
+        log(f"tts buffered pcm: bytes={len(pcm)} duration={duration:.2f}s synth={time.monotonic() - started:.2f}s")
+        result = subprocess.run(command, input=pcm, check=False, timeout=TTS_PLAYER_TIMEOUT_SECONDS)
+        if result.returncode != 0:
+            raise RuntimeError(f"aplay exited with status {result.returncode}")
+        return
+
+    if mode == "hybrid":
+        started = time.monotonic()
+        min_bytes = int(max(0.0, TTS_PREBUFFER_SECONDS) * voice.config.sample_rate * 2)
+        iterator = iter(voice.synthesize_pcm(text))
+        buffered: list[bytes] = []
+        buffered_bytes = 0
+        for chunk in iterator:
+            if not chunk:
+                continue
+            buffered.append(chunk)
+            buffered_bytes += len(chunk)
+            if buffered_bytes >= min_bytes:
+                break
+        duration = buffered_bytes / max(1, voice.config.sample_rate * 2)
+        log(f"tts hybrid prebuffer: bytes={buffered_bytes} duration={duration:.2f}s wait={time.monotonic() - started:.2f}s")
+        play_pcm_chunks(command, chain(buffered, iterator))
+        return
+
+    play_pcm_chunks(command, voice.synthesize_pcm(text))
 
 
 def spoken_text(text: str) -> str:

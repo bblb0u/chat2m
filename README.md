@@ -158,7 +158,7 @@ OLLAMA_MODEL=qwen3:4b-instruct
 - 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
-- TTS 输出：默认使用 Piper 本地中文低延迟 TTS，合成 PCM 后直接通过 ALSA 播放；CosyVoice 保留为可选高质量模式。
+- TTS 输出：默认使用 CosyVoice GPU 流式 TTS，合成 PCM 后直接通过 ALSA 播放；Piper 可作为 CPU 低延迟备选。
 - 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒

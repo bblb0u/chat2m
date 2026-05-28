@@ -454,7 +454,7 @@ install_python_packages() {
 
   echo "[runtime] installing $label dependencies"
   mkdir -p "$PYTHON_RUNTIME_PREFIX"
-  python3 -m pip install --user --no-cache-dir --retries 10 --timeout 180 "$@"
+  python3 -m pip install --user --no-cache-dir --retries "${PIP_RETRIES:-10}" --timeout "${PIP_TIMEOUT:-300}" "$@"
 }
 
 install_python_package_url() {
@@ -463,7 +463,16 @@ install_python_package_url() {
 
   echo "[runtime] installing $label dependency"
   mkdir -p "$PYTHON_RUNTIME_PREFIX"
-  python3 -m pip install --user --no-cache-dir --retries 10 --timeout 180 "$url"
+  python3 -m pip install --user --no-cache-dir --retries "${PIP_RETRIES:-10}" --timeout "${PIP_TIMEOUT:-300}" "$url"
+}
+
+install_python_package_url_force() {
+  label="$1"
+  url="$2"
+
+  echo "[runtime] installing $label dependency"
+  mkdir -p "$PYTHON_RUNTIME_PREFIX"
+  python3 -m pip install --user --no-cache-dir --force-reinstall --no-deps --retries "${PIP_RETRIES:-10}" --timeout "${PIP_TIMEOUT:-300}" "$url"
 }
 
 ensure_apt_packages() {
@@ -473,11 +482,11 @@ ensure_apt_packages() {
       missing="$missing $package"
     fi
   done
-  [ -n "$missing" ] || return
+  [ -n "$missing" ] || return 0
 
   echo "[runtime] installing system dependencies:$missing"
-  apt-get update
-  apt-get install -y --no-install-recommends $missing
+  apt-get -o Acquire::Retries="${APT_RETRIES:-5}" update
+  apt-get -o Acquire::Retries="${APT_RETRIES:-5}" install -y --fix-missing --no-install-recommends $missing
   rm -rf /var/lib/apt/lists/*
 }
 
@@ -499,7 +508,9 @@ ensure_jetson_cuda_runtime() {
   ensure_jetson_apt_sources
   ensure_apt_packages \
     cuda-cudart-11-4 \
+    cuda-cupti-11-4 \
     cuda-nvrtc-11-4 \
+    cuda-nvtx-11-4 \
     libcublas-11-4 \
     libcufft-11-4 \
     libcudnn8 \
@@ -532,6 +543,7 @@ link_jetson_cuda_python_libs() {
   mkdir -p "$nvidia_dir"
 
   link_cuda_lib_dir cuda_runtime "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcudart.so*"
+  link_cuda_lib_dir cuda_cupti "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcupti.so*"
   link_cuda_lib_dir cuda_nvrtc "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libnvrtc.so*"
   link_cuda_lib_dir cublas "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcublas.so*" "libcublasLt.so*"
   link_cuda_lib_dir cudnn "/usr/lib/aarch64-linux-gnu" "libcudnn.so*"
@@ -539,6 +551,7 @@ link_jetson_cuda_python_libs() {
   link_cuda_lib_dir curand "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcurand.so*"
   link_cuda_lib_dir cusolver "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcusolver.so*"
   link_cuda_lib_dir cusparse "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcusparse.so*"
+  link_cuda_lib_dir nccl "/usr/lib/aarch64-linux-gnu" "libnccl.so*"
   link_cuda_lib_dir nvtx "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libnvToolsExt.so*"
 }
 
@@ -576,7 +589,7 @@ install_cosyvoice_torch() {
   if verify_torch_cuda_runtime; then
     return
   fi
-  install_python_package_url \
+  install_python_package_url_force \
     "Jetson CUDA PyTorch" \
     "${JETSON_TORCH_WHEEL_URL:-https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl}"
   link_jetson_cuda_python_libs
@@ -608,11 +621,45 @@ sensevoice_runtime_ok() {
     && python_module_ok sentencepiece
 }
 
+patch_sensevoice_runtime() {
+  python3 <<'PY'
+from pathlib import Path
+
+import sense_voice_streaming_asr
+
+package_dir = Path(sense_voice_streaming_asr.__file__).resolve().parent
+
+main_path = package_dir / "sense_voice_streaming_asr.py"
+if main_path.is_file():
+    text = main_path.read_text(encoding="utf-8")
+    if "from __future__ import annotations" not in text.splitlines()[:5]:
+        main_path.write_text("from __future__ import annotations\n" + text, encoding="utf-8")
+
+model_data_path = package_dir / "model_data.py"
+if model_data_path.is_file():
+    text = model_data_path.read_text(encoding="utf-8")
+    old = """        with (
+            SENSEVOICE_CMVN_PATH as cmvn_path,
+            SENSEVOICE_TOKENS_PATH as tokens_json_path,
+            SENSEVOICE_MODEL_PATH as model_path,
+        ):
+"""
+    new = """        with SENSEVOICE_CMVN_PATH as cmvn_path, \\
+                SENSEVOICE_TOKENS_PATH as tokens_json_path, \\
+                SENSEVOICE_MODEL_PATH as model_path:
+"""
+    if old in text:
+        model_data_path.write_text(text.replace(old, new), encoding="utf-8")
+PY
+}
+
 ensure_sensevoice_runtime() {
   if sensevoice_runtime_ok; then
+    patch_sensevoice_runtime
     return
   fi
   install_python_packages "SenseVoice streaming ASR" "sense-voice-streaming-asr==0.1.1" "onnxruntime==${ONNXRUNTIME_VERSION:-1.16.3}" "sentencepiece"
+  patch_sensevoice_runtime
 }
 
 cosyvoice_runtime_ok() {
@@ -623,6 +670,7 @@ cosyvoice_runtime_ok() {
     && python_module_ok whisper \
     && python_module_ok conformer \
     && python_module_ok diffusers \
+    && python_module_ok einops \
     && python_module_ok librosa \
     && python_module_ok tiktoken \
     && python_module_ok inflect \
@@ -667,9 +715,6 @@ ensure_cosyvoice_runtime() {
     "sentencepiece" \
     "tiktoken==0.7.0" \
     "transformers==4.45.2"
-  if [ "${COSYVOICE_TEXT_FRONTEND:-0}" = "1" ] || [ "${COSYVOICE_TEXT_FRONTEND:-0}" = "true" ]; then
-    install_python_packages "CosyVoice text frontend" "wetext==0.0.4"
-  fi
   if [ ! -d "$COSYVOICE_CODE_DIR/cosyvoice" ]; then
     echo "[runtime] downloading CosyVoice code"
     rm -rf "$COSYVOICE_CODE_DIR"
