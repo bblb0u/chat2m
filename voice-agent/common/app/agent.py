@@ -90,13 +90,6 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
-PIPER_MODEL = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL / "model.onnx"
-PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
-PIPER_SPEAKER = env_int("PIPER_SPEAKER")
-PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
-PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
-PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
-PIPER_VOLUME = env_float("PIPER_VOLUME")
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
 SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
 TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
@@ -543,27 +536,6 @@ def play_wav(path: Path) -> None:
         log(f"aplay is unavailable: {exc}")
 
 
-class PiperTTS:
-    def __init__(self, voice: Any, config: Any) -> None:
-        self.voice = voice
-        self.piper_config = config
-        self.config = voice.config
-
-    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
-        if hasattr(self.voice, "synthesize_stream_raw"):
-            yield from self.voice.synthesize_stream_raw(
-                text,
-                speaker_id=PIPER_SPEAKER,
-                length_scale=PIPER_LENGTH_SCALE,
-                noise_scale=PIPER_NOISE_SCALE,
-                noise_w=PIPER_NOISE_W_SCALE,
-            )
-            return
-
-        for chunk in self.voice.synthesize(text, self.piper_config):
-            yield audio_chunk_bytes(chunk)
-
-
 class CosyVoiceTTS:
     def __init__(self, model: Any) -> None:
         self.model = model
@@ -629,27 +601,6 @@ class CachedTextToSpeech:
         if text and text not in self.cache:
             for _ in self.synthesize_pcm(text):
                 pass
-
-
-def create_piper_tts() -> TextToSpeech:
-    from piper.voice import PiperVoice
-
-    require_file(PIPER_MODEL)
-    require_file(PIPER_CONFIG)
-    voice = PiperVoice.load(PIPER_MODEL, config_path=PIPER_CONFIG)
-    try:
-        from piper.config import SynthesisConfig
-
-        config = SynthesisConfig(
-            speaker_id=PIPER_SPEAKER,
-            length_scale=PIPER_LENGTH_SCALE,
-            noise_scale=PIPER_NOISE_SCALE,
-            noise_w_scale=PIPER_NOISE_W_SCALE,
-            volume=PIPER_VOLUME,
-        )
-    except ImportError:
-        config = None
-    return PiperTTS(voice, config)
 
 
 def create_cosyvoice_tts() -> TextToSpeech:
@@ -1016,8 +967,6 @@ def install_torchaudio_stub() -> None:
 
 
 def create_tts() -> tuple[TextToSpeech, None]:
-    if VOICE_TTS_ENGINE == "piper":
-        return wrap_tts(create_piper_tts()), None
     if VOICE_TTS_ENGINE == "cosyvoice":
         return wrap_tts(create_cosyvoice_tts()), None
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
@@ -1049,19 +998,6 @@ def warmup_tts(voice: TextToSpeech) -> None:
             f"text_chars={len(text)} chunks={chunks} bytes={bytes_total} "
             f"elapsed={time.monotonic() - started:.2f}s"
         )
-
-
-def audio_chunk_bytes(chunk: Any) -> bytes:
-    int16_audio = getattr(chunk, "audio_int16_array", None)
-    if int16_audio is not None:
-        return np.asarray(int16_audio, dtype=np.int16).tobytes()
-
-    float_audio = getattr(chunk, "audio_float_array", None)
-    if float_audio is None:
-        raise RuntimeError(f"unsupported Piper audio chunk: {type(chunk)!r}")
-
-    clipped = np.clip(np.asarray(float_audio, dtype=np.float32), -1.0, 1.0)
-    return (clipped * 32767.0).astype(np.int16).tobytes()
 
 
 def tensor_audio_bytes(audio: Any) -> bytes:

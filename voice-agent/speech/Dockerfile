@@ -86,6 +86,36 @@ RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps "$JETSON_T
       "tiktoken==0.7.0" \
       "transformers==4.45.2"
 
+RUN python3 - <<'PY'
+from pathlib import Path
+
+import sense_voice_streaming_asr
+
+package_dir = Path(sense_voice_streaming_asr.__file__).resolve().parent
+
+main_path = package_dir / "sense_voice_streaming_asr.py"
+if main_path.is_file():
+    text = main_path.read_text(encoding="utf-8")
+    if "from __future__ import annotations" not in text.splitlines()[:5]:
+        main_path.write_text("from __future__ import annotations\n" + text, encoding="utf-8")
+
+model_data_path = package_dir / "model_data.py"
+if model_data_path.is_file():
+    text = model_data_path.read_text(encoding="utf-8")
+    old = """        with (
+            SENSEVOICE_CMVN_PATH as cmvn_path,
+            SENSEVOICE_TOKENS_PATH as tokens_json_path,
+            SENSEVOICE_MODEL_PATH as model_path,
+        ):
+"""
+    new = """        with SENSEVOICE_CMVN_PATH as cmvn_path, \\
+                SENSEVOICE_TOKENS_PATH as tokens_json_path, \\
+                SENSEVOICE_MODEL_PATH as model_path:
+"""
+    if old in text:
+        model_data_path.write_text(text.replace(old, new), encoding="utf-8")
+PY
+
 RUN git clone --depth 1 --branch "$COSYVOICE_GIT_REF" https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
     && git clone --depth 1 https://github.com/shivammehta25/Matcha-TTS.git /opt/CosyVoice/third_party/Matcha-TTS
 
@@ -97,8 +127,7 @@ COPY voice-agent/speech/app ./app
 ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
     COSYVOICE_PACKAGE_PATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS \
     LD_LIBRARY_PATH=/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
-    PATH=/usr/src/tensorrt/bin:$PATH \
-    PYTHON_RUNTIME_PREFIX=/opt/chat2m-runtime/python
+    PATH=/usr/src/tensorrt/bin:$PATH
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-m", "app.speech"]

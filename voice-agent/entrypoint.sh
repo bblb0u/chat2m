@@ -5,16 +5,6 @@ MODELS_DIR="${MODELS_DIR:-/models}"
 DEFAULT_CONFIG_DIR="${DEFAULT_CONFIG_DIR:-/defaults/config}"
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
 RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
-PYTHON_RUNTIME_PREFIX="${PYTHON_RUNTIME_PREFIX:-$MODELS_DIR/runtime/python}"
-PYTHON_RUNTIME_VERSION="$(python3 - <<'PY'
-import sys
-print(f"python{sys.version_info.major}.{sys.version_info.minor}")
-PY
-)"
-PYTHON_RUNTIME_SITE="$PYTHON_RUNTIME_PREFIX/lib/$PYTHON_RUNTIME_VERSION/site-packages"
-export PYTHONUSERBASE="$PYTHON_RUNTIME_PREFIX"
-export PATH="$PYTHON_RUNTIME_PREFIX/bin:$PATH"
-export PYTHONPATH="$PYTHON_RUNTIME_SITE${PYTHONPATH:+:$PYTHONPATH}"
 
 default_voice_model_set() {
   case "$VOICE_ROLE" in
@@ -69,7 +59,7 @@ resolve_kws_model() {
 resolve_asr_model() {
   VOICE_ASR_ENGINE="$(normalize_key "${VOICE_ASR_ENGINE:-sensevoice}")"
   case "$VOICE_ASR_ENGINE" in
-    sherpa|sherpa-onnx)
+    sherpa)
       VOICE_ASR_ENGINE="sherpa"
       VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20}"
       case "$VOICE_ASR_MODEL" in
@@ -84,8 +74,7 @@ resolve_asr_model() {
     sensevoice)
       VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-SenseVoiceSmall}"
       case "$VOICE_ASR_MODEL" in
-        SenseVoiceSmall|sensevoice-small|sensevoicesmall)
-          VOICE_ASR_MODEL="SenseVoiceSmall"
+        SenseVoiceSmall)
           ASR_HF_REPO_ID="haixuantao/SenseVoiceSmall-onnx"
           ASR_HF_REVISION="main"
           ASR_REQUIRED_FILES="config.yaml,model_quant.onnx,am.mvn,tokens.json"
@@ -107,29 +96,15 @@ resolve_asr_model() {
 resolve_tts_model() {
   VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-cosyvoice}")"
   case "$VOICE_TTS_ENGINE" in
-    piper)
-      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
-      case "$VOICE_TTS_MODEL" in
-        zh_CN-huayan-medium)
-          PIPER_MODEL_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx"
-          PIPER_CONFIG_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
-          ;;
-        *)
-          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "zh_CN-huayan-medium"
-          ;;
-      esac
-      ;;
     cosyvoice)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-CosyVoice-300M-SFT}"
       case "$VOICE_TTS_MODEL" in
-        CosyVoice-300M-SFT|cosyvoice-300m-sft)
-          VOICE_TTS_MODEL="CosyVoice-300M-SFT"
+        CosyVoice-300M-SFT)
           TTS_HF_REPO_ID="FunAudioLLM/CosyVoice-300M-SFT"
           TTS_HF_REVISION="main"
           TTS_REQUIRED_FILES="cosyvoice.yaml,flow.pt,hift.pt,llm.pt,spk2info.pt,campplus.onnx,speech_tokenizer_v1.onnx"
           ;;
-        CosyVoice-300M-Instruct|cosyvoice-300m-instruct)
-          VOICE_TTS_MODEL="CosyVoice-300M-Instruct"
+        CosyVoice-300M-Instruct)
           TTS_HF_REPO_ID="FunAudioLLM/CosyVoice-300M-Instruct"
           TTS_HF_REVISION="main"
           TTS_REQUIRED_FILES="cosyvoice.yaml,flow.pt,hift.pt,llm.pt,spk2info.pt,campplus.onnx,speech_tokenizer_v1.onnx"
@@ -140,7 +115,7 @@ resolve_tts_model() {
       esac
       ;;
     *)
-      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "piper, cosyvoice"
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "cosyvoice"
       ;;
   esac
 }
@@ -185,52 +160,6 @@ init_config() {
   done
 }
 
-sync_runtime_env_defaults() {
-  default_runtime="$DEFAULT_CONFIG_DIR/runtime.env"
-  target_runtime="$RUNTIME_CONFIG_PATH"
-  [ -f "$default_runtime" ] || return 0
-  [ -f "$target_runtime" ] || return 0
-  [ -w "$target_runtime" ] || return 0
-
-  sync_lock_dir="$CONFIG_DIR/.runtime-env-sync.lock"
-  sync_lock_waited=0
-  while ! mkdir "$sync_lock_dir" 2>/dev/null; do
-    sleep 1
-    sync_lock_waited=$((sync_lock_waited + 1))
-    if [ "$sync_lock_waited" -ge 60 ]; then
-      echo "Removing stale runtime config sync lock: $sync_lock_dir" >&2
-      rmdir "$sync_lock_dir" 2>/dev/null || true
-      sync_lock_waited=0
-    fi
-  done
-  trap 'rmdir "$sync_lock_dir" 2>/dev/null || true' EXIT
-
-  appended=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      ''|\#*) continue ;;
-      *=*) ;;
-      *) continue ;;
-    esac
-    key="${line%%=*}"
-    case "$key" in
-      ''|*[!A-Za-z0-9_]*) continue ;;
-    esac
-
-    if ! grep -Eq "^[[:space:]]*$key[[:space:]]*=" "$target_runtime"; then
-      if [ "$appended" -eq 0 ]; then
-        printf '\n# Added by Chat2M image defaults. Existing values are never overwritten.\n' >> "$target_runtime"
-        appended=1
-      fi
-      printf '%s\n' "$line" >> "$target_runtime"
-      echo "Added missing runtime config: $key"
-    fi
-  done < "$default_runtime"
-
-  rmdir "$sync_lock_dir"
-  trap - EXIT
-}
-
 required_files_ok() {
   for required_file in "$@"; do
     if [ ! -s "$required_file" ]; then
@@ -238,20 +167,6 @@ required_files_ok() {
       return 1
     fi
   done
-}
-
-json_file_ok() {
-  python3 - "$1" <<'PY'
-import json
-import sys
-
-try:
-    with open(sys.argv[1], "r", encoding="utf-8") as handle:
-        json.load(handle)
-except Exception as exc:
-    print(f"Invalid JSON file: {sys.argv[1]}: {exc}", file=sys.stderr)
-    sys.exit(1)
-PY
 }
 
 kws_runtime_ok() {
@@ -337,19 +252,6 @@ except Exception as exc:
 PY
 }
 
-piper_runtime_ok() {
-  python3 - "$PIPER_DIR/model.onnx" "$PIPER_DIR/model.onnx.json" <<'PY'
-import sys
-from piper.voice import PiperVoice
-
-try:
-    PiperVoice.load(sys.argv[1], config_path=sys.argv[2])
-except Exception as exc:
-    print(f"Invalid Piper model: {sys.argv[1]}: {exc}", file=sys.stderr)
-    sys.exit(1)
-PY
-}
-
 kws_model_ok() {
   required_files_ok \
     "$KWS_MODEL/tokens.txt" \
@@ -372,14 +274,6 @@ asr_model_ok() {
     "$ASR_MODEL/decoder-epoch-99-avg-1$asr_suffix" \
     "$ASR_MODEL/joiner-epoch-99-avg-1$asr_suffix" \
     && asr_runtime_ok
-}
-
-piper_model_ok() {
-  required_files_ok \
-    "$PIPER_DIR/model.onnx" \
-    "$PIPER_DIR/model.onnx.json" \
-    && json_file_ok "$PIPER_DIR/model.onnx.json" \
-    && piper_runtime_ok
 }
 
 dir_has_files() {
@@ -706,94 +600,24 @@ sys.exit(0 if found else 1)
 PY
 }
 
-install_python_packages() {
-  label="$1"
-  shift
-
-  echo "[runtime] installing $label dependencies"
-  mkdir -p "$PYTHON_RUNTIME_PREFIX"
-  python3 -m pip install --user --no-cache-dir --retries "${PIP_RETRIES:-10}" --timeout "${PIP_TIMEOUT:-300}" "$@"
+missing_image_dependency() {
+  echo "$1 is missing from the image. Rebuild the Docker image with the required dependency baked in." >&2
+  exit 1
 }
 
-install_python_package_url() {
-  label="$1"
-  url="$2"
-
-  echo "[runtime] installing $label dependency"
-  mkdir -p "$PYTHON_RUNTIME_PREFIX"
-  python3 -m pip install --user --no-cache-dir --retries "${PIP_RETRIES:-10}" --timeout "${PIP_TIMEOUT:-300}" "$url"
+require_python_module() {
+  module="$1"
+  python_module_ok "$module" || missing_image_dependency "Python module '$module'"
 }
 
-install_python_package_url_force() {
-  label="$1"
-  url="$2"
-
-  echo "[runtime] installing $label dependency"
-  mkdir -p "$PYTHON_RUNTIME_PREFIX"
-  python3 -m pip install --user --no-cache-dir --force-reinstall --no-deps --retries "${PIP_RETRIES:-10}" --timeout "${PIP_TIMEOUT:-300}" "$url"
-}
-
-ensure_apt_packages() {
-  missing=""
-  for package in "$@"; do
-    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed"; then
-      missing="$missing $package"
-    fi
-  done
-  [ -n "$missing" ] || return 0
-
-  echo "[runtime] installing system dependencies:$missing"
-  apt-get -o Acquire::Retries="${APT_RETRIES:-5}" update
-  apt-get -o Acquire::Retries="${APT_RETRIES:-5}" install -y --fix-missing --no-install-recommends $missing
-  rm -rf /var/lib/apt/lists/*
-}
-
-ensure_jetson_apt_sources() {
-  if [ ! -f /etc/apt/sources.list.d/nvidia-l4t-apt-source.list ]; then
-    echo "[runtime] adding NVIDIA Jetson apt sources"
-    curl -fsSL --retry 5 --connect-timeout 20 https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
-      -o /etc/apt/trusted.gpg.d/jetson-ota-public.asc
-    jetson_platform="${JETSON_L4T_PLATFORM:-t234}"
-    cat > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list <<'EOF'
-deb https://repo.download.nvidia.com/jetson/common r35.6 main
-EOF
-    printf 'deb https://repo.download.nvidia.com/jetson/%s r35.6 main\n' "$jetson_platform" \
-      >> /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
-  fi
-}
-
-ensure_jetson_cuda_runtime() {
-  ensure_jetson_apt_sources
-  ensure_apt_packages \
-    cuda-cudart-11-4 \
-    cuda-cupti-11-4 \
-    cuda-nvrtc-11-4 \
-    cuda-nvtx-11-4 \
-    libcublas-11-4 \
-    libcufft-11-4 \
-    libcudnn8 \
-    libcurand-11-4 \
-    libcusolver-11-4 \
-    libcusparse-11-4 \
-    libnpp-11-4
+require_command() {
+  command_name="$1"
+  command -v "$command_name" >/dev/null 2>&1 || missing_image_dependency "Command '$command_name'"
 }
 
 ensure_cosyvoice_tensorrt_runtime() {
-  ensure_jetson_apt_sources
-  ensure_apt_packages \
-    libcudla-11-4 \
-    libnvinfer8 \
-    libnvinfer-plugin8 \
-    libnvonnxparsers8 \
-    libnvparsers8 \
-    python3-libnvinfer \
-    tensorrt-libs \
-    libnvinfer-bin
-
-  if ! python_module_ok onnx; then
-    install_python_packages "ONNX runtime export helper" "onnx==1.16.1"
-  fi
-  python_module_ok tensorrt
+  require_python_module onnx
+  require_python_module tensorrt
 }
 
 verify_torch_cuda_runtime() {
@@ -814,38 +638,6 @@ print(f"[runtime] torch cuda ready: torch={torch.__version__} cuda={torch.versio
 PY
 }
 
-link_jetson_cuda_python_libs() {
-  nvidia_dir="$PYTHON_RUNTIME_SITE/nvidia"
-  mkdir -p "$nvidia_dir"
-
-  link_cuda_lib_dir cuda_runtime "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcudart.so*"
-  link_cuda_lib_dir cuda_cupti "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcupti.so*"
-  link_cuda_lib_dir cuda_nvrtc "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libnvrtc.so*"
-  link_cuda_lib_dir cublas "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcublas.so*" "libcublasLt.so*"
-  link_cuda_lib_dir cudnn "/usr/lib/aarch64-linux-gnu" "libcudnn.so*"
-  link_cuda_lib_dir cufft "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcufft.so*"
-  link_cuda_lib_dir curand "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcurand.so*"
-  link_cuda_lib_dir cusolver "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcusolver.so*"
-  link_cuda_lib_dir cusparse "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libcusparse.so*"
-  link_cuda_lib_dir nccl "/usr/lib/aarch64-linux-gnu" "libnccl.so*"
-  link_cuda_lib_dir nvtx "/usr/local/cuda-11.4/targets/aarch64-linux/lib" "libnvToolsExt.so*"
-}
-
-link_cuda_lib_dir() {
-  package_name="$1"
-  source_dir="$2"
-  shift 2
-  target_dir="$PYTHON_RUNTIME_SITE/nvidia/$package_name/lib"
-  mkdir -p "$target_dir"
-
-  for pattern in "$@"; do
-    for source_file in "$source_dir"/$pattern; do
-      [ -e "$source_file" ] || continue
-      ln -sf "$source_file" "$target_dir/$(basename "$source_file")"
-    done
-  done
-}
-
 cosyvoice_cuda_requested() {
   [ "${VOICE_TTS_ENGINE:-}" = "cosyvoice" ] || return 1
   case "$(normalize_key "${VOICE_TTS_DEVICE:-cuda}")" in
@@ -858,36 +650,13 @@ cosyvoice_cuda_requested() {
   esac
 }
 
-install_cosyvoice_torch() {
-  cosyvoice_cuda_requested
-  ensure_jetson_cuda_runtime
-  link_jetson_cuda_python_libs
-  if verify_torch_cuda_runtime; then
-    return
-  fi
-  install_python_package_url_force \
-    "Jetson CUDA PyTorch" \
-    "${JETSON_TORCH_WHEEL_URL:-https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl}"
-  link_jetson_cuda_python_libs
-  verify_torch_cuda_runtime
-}
-
 ensure_kws_runtime() {
-  if python_module_ok sherpa_onnx && command -v sherpa-onnx-cli >/dev/null 2>&1; then
-    return
-  fi
-  install_python_packages "sherpa-onnx" "sherpa-onnx==1.12.38"
+  require_python_module sherpa_onnx
+  require_command sherpa-onnx-cli
 }
 
 ensure_sherpa_asr_runtime() {
   ensure_kws_runtime
-}
-
-ensure_piper_runtime() {
-  if python_module_ok piper; then
-    return
-  fi
-  install_python_packages "Piper" "piper-tts==1.2.0"
 }
 
 sensevoice_runtime_ok() {
@@ -897,45 +666,11 @@ sensevoice_runtime_ok() {
     && python_module_ok sentencepiece
 }
 
-patch_sensevoice_runtime() {
-  python3 <<'PY'
-from pathlib import Path
-
-import sense_voice_streaming_asr
-
-package_dir = Path(sense_voice_streaming_asr.__file__).resolve().parent
-
-main_path = package_dir / "sense_voice_streaming_asr.py"
-if main_path.is_file():
-    text = main_path.read_text(encoding="utf-8")
-    if "from __future__ import annotations" not in text.splitlines()[:5]:
-        main_path.write_text("from __future__ import annotations\n" + text, encoding="utf-8")
-
-model_data_path = package_dir / "model_data.py"
-if model_data_path.is_file():
-    text = model_data_path.read_text(encoding="utf-8")
-    old = """        with (
-            SENSEVOICE_CMVN_PATH as cmvn_path,
-            SENSEVOICE_TOKENS_PATH as tokens_json_path,
-            SENSEVOICE_MODEL_PATH as model_path,
-        ):
-"""
-    new = """        with SENSEVOICE_CMVN_PATH as cmvn_path, \\
-                SENSEVOICE_TOKENS_PATH as tokens_json_path, \\
-                SENSEVOICE_MODEL_PATH as model_path:
-"""
-    if old in text:
-        model_data_path.write_text(text.replace(old, new), encoding="utf-8")
-PY
-}
-
 ensure_sensevoice_runtime() {
   if sensevoice_runtime_ok; then
-    patch_sensevoice_runtime
     return
   fi
-  install_python_packages "SenseVoice streaming ASR" "sense-voice-streaming-asr==0.1.1" "onnxruntime==${ONNXRUNTIME_VERSION:-1.16.3}" "sentencepiece"
-  patch_sensevoice_runtime
+  missing_image_dependency "SenseVoice streaming ASR runtime"
 }
 
 cosyvoice_runtime_ok() {
@@ -959,53 +694,18 @@ cosyvoice_runtime_ok() {
 }
 
 ensure_cosyvoice_runtime() {
-  COSYVOICE_CODE_DIR="${COSYVOICE_CODE_DIR:-$MODELS_DIR/runtime/CosyVoice}"
-  export COSYVOICE_PACKAGE_PATH="$COSYVOICE_CODE_DIR:$COSYVOICE_CODE_DIR/third_party/Matcha-TTS"
-  if [ -d "$COSYVOICE_CODE_DIR/cosyvoice" ] \
-    && [ -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ] \
-    && cosyvoice_runtime_ok; then
-    cosyvoice_cuda_requested
-    ensure_jetson_cuda_runtime
-    if env_flag_enabled "${COSYVOICE_LOAD_TRT:-0}"; then
-      ensure_cosyvoice_tensorrt_runtime
-    fi
-    verify_torch_cuda_runtime
-    return
+  COSYVOICE_CODE_DIR="${COSYVOICE_CODE_DIR:-/opt/CosyVoice}"
+  export COSYVOICE_PACKAGE_PATH="${COSYVOICE_PACKAGE_PATH:-$COSYVOICE_CODE_DIR:$COSYVOICE_CODE_DIR/third_party/Matcha-TTS}"
+  [ -d "$COSYVOICE_CODE_DIR/cosyvoice" ] || missing_image_dependency "CosyVoice code directory '$COSYVOICE_CODE_DIR/cosyvoice'"
+  [ -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ] || missing_image_dependency "Matcha-TTS code directory '$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha'"
+  if ! cosyvoice_runtime_ok; then
+    missing_image_dependency "CosyVoice runtime"
   fi
-
-  ensure_apt_packages git
-  install_cosyvoice_torch
-  install_python_packages \
-    "CosyVoice runtime" \
-    "onnxruntime==${ONNXRUNTIME_VERSION:-1.16.3}" \
-    "accelerate==0.34.2" \
-    "conformer==0.3.2" \
-    "diffusers==0.29.0" \
-    "einops==0.8.0" \
-    "hydra-core" \
-    "HyperPyYAML==1.2.3" \
-    "inflect==7.3.1" \
-    "librosa==0.10.2" \
-    "modelscope==1.20.0" \
-    "omegaconf==2.3.0" \
-    "openai-whisper==20231117" \
-    "regex" \
-    "scipy==1.10.1" \
-    "sentencepiece" \
-    "tiktoken==0.7.0" \
-    "transformers==4.45.2"
-  if [ ! -d "$COSYVOICE_CODE_DIR/cosyvoice" ]; then
-    echo "[runtime] downloading CosyVoice code"
-    rm -rf "$COSYVOICE_CODE_DIR"
-    mkdir -p "$(dirname "$COSYVOICE_CODE_DIR")"
-    git clone --depth 1 --branch "${COSYVOICE_GIT_REF:-v2.0}" https://github.com/FunAudioLLM/CosyVoice.git "$COSYVOICE_CODE_DIR"
+  cosyvoice_cuda_requested
+  if env_flag_enabled "${COSYVOICE_LOAD_TRT:-0}"; then
+    ensure_cosyvoice_tensorrt_runtime
   fi
-  if [ ! -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ]; then
-    echo "[runtime] downloading Matcha-TTS code"
-    rm -rf "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS"
-    mkdir -p "$COSYVOICE_CODE_DIR/third_party"
-    git clone --depth 1 https://github.com/shivammehta25/Matcha-TTS.git "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS"
-  fi
+  verify_torch_cuda_runtime
 }
 
 ensure_selected_runtimes() {
@@ -1019,7 +719,6 @@ ensure_selected_runtimes() {
       sensevoice) ensure_sensevoice_runtime ;;
     esac
     case "$VOICE_TTS_ENGINE" in
-      piper) ensure_piper_runtime ;;
       cosyvoice) ensure_cosyvoice_runtime ;;
     esac
   fi
@@ -1135,15 +834,6 @@ PY
   echo "[models] extracted $name"
 }
 
-download_file() {
-  output="$1"
-  url="$2"
-
-  mkdir -p "$(dirname "$output")"
-  rm -f "$output"
-  download_with_progress "$output" "$url" "$(basename "$output")"
-}
-
 download_hf_snapshot() {
   target="$1"
   repo_id="$2"
@@ -1211,24 +901,6 @@ ensure_archive_model() {
   fi
 }
 
-ensure_piper_model() {
-  if piper_model_ok; then
-    echo "piper $VOICE_TTS_MODEL is ready"
-    return
-  fi
-
-  echo "piper $VOICE_TTS_MODEL is missing or invalid; re-downloading"
-  rm -rf "$PIPER_DIR"
-  download_file "$PIPER_DIR/model.onnx" "$PIPER_MODEL_URL"
-  download_file "$PIPER_DIR/model.onnx.json" "$PIPER_CONFIG_URL"
-
-  echo "[models] validating piper $VOICE_TTS_MODEL"
-  if ! piper_model_ok; then
-    echo "piper $VOICE_TTS_MODEL is still invalid after download" >&2
-    exit 1
-  fi
-}
-
 ensure_hf_snapshot_model() {
   name="$1"
   repo_id="$2"
@@ -1253,7 +925,6 @@ ensure_hf_snapshot_model() {
 }
 
 init_config
-sync_runtime_env_defaults
 load_runtime_env
 
 VOICE_MODELS_REQUIRED="${VOICE_MODELS_REQUIRED:-1}"
@@ -1266,7 +937,6 @@ resolve_tts_model
 KWS_MODEL="$MODELS_DIR/$KWS_MODEL_NAME"
 ASR_MODEL="$MODELS_DIR/$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
 VAD_MODEL_DIR="$MODELS_DIR/$VOICE_ASR_ENGINE/speech_fsmn_vad_zh-cn-16k-common-onnx"
-PIPER_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
 TTS_MODEL_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
 export VOICE_ASR_ENGINE
 export VOICE_ASR_MODEL
@@ -1282,7 +952,6 @@ if model_selected speech; then
     sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
   esac
   case "$VOICE_TTS_ENGINE" in
-    piper) MODEL_SET="$MODEL_SET,piper" ;;
     cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
   esac
 fi
@@ -1328,10 +997,6 @@ if model_selected asr; then
     "$ASR_MODEL_URL" \
     asr_model_ok \
     "$ASR_MODEL"
-fi
-
-if model_selected piper; then
-  ensure_piper_model
 fi
 
 if model_selected sensevoice; then

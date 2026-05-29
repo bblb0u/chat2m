@@ -158,7 +158,7 @@ OLLAMA_MODEL=qwen3:4b-instruct
 - 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
-- TTS 输出：默认使用 CosyVoice GPU 流式 TTS，合成 PCM 后直接通过 ALSA 播放；Piper 可作为 CPU 低延迟备选。
+- TTS 输出：默认使用 CosyVoice GPU 流式 TTS，合成 PCM 后直接通过 ALSA 播放。
 - 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒
@@ -174,13 +174,13 @@ docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 
 镜像会预装对应服务需要的运行时依赖。启动后主要检查和下载的是 `data/models/` 下可迁移复用的唤醒、ASR、TTS 模型，以及 CosyVoice fp16 JIT/TRT 加速文件；换机器时保留 `data/` 可以复用这些内容。
 
-ASR/TTS 大模型不打进镜像，避免镜像本身过大。运行时只需要在 `data/config/runtime.env` 里选择引擎和模型：
+ASR/TTS 大模型不打进镜像，避免镜像本身过大。默认链路只需要在 `data/config/runtime.env` 里保持下面的模型选择：
 
 ```env
-VOICE_ASR_ENGINE=sherpa
-VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
-VOICE_TTS_ENGINE=piper
-VOICE_TTS_MODEL=zh_CN-huayan-medium
+VOICE_ASR_ENGINE=sensevoice
+VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_TTS_ENGINE=cosyvoice
+VOICE_TTS_MODEL=CosyVoice-300M-SFT
 ```
 
 默认配置是 SenseVoice 流式 ASR + CosyVoice 流式 TTS，CosyVoice 必须启用 GPU。`chat2m-speech` 会用 Docker `nvidia` runtime 启动；只要选择 `VOICE_TTS_ENGINE=cosyvoice`，启动时就会强制校验 `torch.cuda.is_available()`，CUDA 不可用时直接启动失败，不会退回 CPU：
@@ -200,13 +200,12 @@ COSYVOICE_FP16=1
 ```env
 VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
-VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
 VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT / CosyVoice-300M-Instruct
 VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
-VOICE_TTS_DEVICE=cuda       # CosyVoice 只允许 auto / cuda，piper 始终 CPU
+VOICE_TTS_DEVICE=cuda       # CosyVoice 只允许 auto / cuda
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；依赖尽量随镜像发布，运行时兜底安装只用于旧镜像或手工改坏的环境。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 
