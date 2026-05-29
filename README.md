@@ -158,7 +158,7 @@ OLLAMA_MODEL=qwen3:4b-instruct
 - 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
-- TTS 输出：默认使用 CosyVoice GPU 流式 TTS，也保留 Piper CPU 轻量可选链路，合成 PCM 后直接通过 ALSA 播放。
+- TTS 输出：默认使用 MeloTTS ONNX CPU 链路；重模型可切换 F5-TTS，合成 PCM 后直接通过 ALSA 播放。
 - 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒
@@ -170,38 +170,41 @@ docker compose up -d
 docker compose logs -f chat2m-wake chat2m-speech chat2m-status
 ```
 
-默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 CosyVoice 说话人/语速，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
+默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 TTS 引擎，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
 
-镜像会预装对应服务需要的运行时依赖。启动后主要检查和下载的是 `data/models/` 下可迁移复用的唤醒、ASR、TTS 模型，以及 CosyVoice fp16 JIT/TRT 加速文件；换机器时保留 `data/` 可以复用这些内容。
+镜像会预装对应服务需要的运行时依赖。启动后主要检查和下载的是 `data/models/` 下可迁移复用的唤醒、ASR、TTS 模型；换机器时保留 `data/` 可以复用这些内容。
 
 ASR/TTS 大模型不打进镜像，避免镜像本身过大。默认链路只需要在 `data/config/runtime.env` 里保持下面的模型选择：
 
 ```env
 VOICE_ASR_ENGINE=sensevoice
 VOICE_ASR_MODEL=SenseVoiceSmall
-VOICE_TTS_ENGINE=sherpa
-VOICE_TTS_MODEL=matcha-icefall-zh-en
+VOICE_TTS_ENGINE=melotts
+VOICE_TTS_MODEL=vits-melo-tts-zh_en
 ```
 
-默认配置是 SenseVoice 流式 ASR + Sherpa ONNX TTS。TTS 默认整段合成后播放，避免慢速模型边合成边播放时卡顿：
+默认配置是 SenseVoice 流式 ASR + MeloTTS ONNX TTS。TTS 默认整段合成后播放，避免慢速模型边合成边播放时卡顿：
 
 ```env
-VOICE_TTS_ENGINE=sherpa
-VOICE_TTS_MODEL=matcha-icefall-zh-en
+VOICE_TTS_ENGINE=melotts
+VOICE_TTS_MODEL=vits-melo-tts-zh_en
 TTS_PLAYBACK_MODE=buffered
 ```
 
-CosyVoice 仍然可以按配置切换，但必须启用 GPU。`chat2m-speech` 会用 Docker `nvidia` runtime 启动；只要选择 `VOICE_TTS_ENGINE=cosyvoice`，启动时就会强制校验 `torch.cuda.is_available()`，CUDA 不可用时直接启动失败，不会退回 CPU：
+F5-TTS 是参考音频驱动的重模型链路。默认参数用 4 step 且关闭 CFG，优先降低实时回复延迟；speech 启动时会预热常用短句。如果要换音色，把参考 wav 放到 `data/models/` 或其他容器可见路径，并同时配置参考文本：
 
 ```env
 VOICE_ASR_ENGINE=sensevoice
 VOICE_ASR_MODEL=SenseVoiceSmall
 VOICE_ASR_DEVICE=auto
-VOICE_TTS_ENGINE=cosyvoice
-VOICE_TTS_MODEL=CosyVoice-300M-SFT
-VOICE_TTS_DEVICE=cuda
-COSYVOICE_FP16=1
-COSYVOICE_STREAM=0
+VOICE_TTS_ENGINE=f5-tts
+VOICE_TTS_MODEL=F5TTS_v1_Base
+VOICE_TTS_DEVICE=auto
+F5_TTS_REF_AUDIO=
+F5_TTS_REF_TEXT=对，这就是我，万人敬仰的太乙真人。
+F5_TTS_NFE_STEP=4
+F5_TTS_CFG_STRENGTH=0.0
+F5_TTS_FP16=1
 TTS_PLAYBACK_MODE=buffered
 ```
 
@@ -210,8 +213,8 @@ TTS_PLAYBACK_MODE=buffered
 ```env
 VOICE_ASR_ENGINE=sherpa
 VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
-VOICE_TTS_ENGINE=sherpa
-VOICE_TTS_MODEL=matcha-icefall-zh-en
+VOICE_TTS_ENGINE=melotts
+VOICE_TTS_MODEL=vits-melo-tts-zh_en
 ```
 
 目前内置可选项：
@@ -219,14 +222,14 @@ VOICE_TTS_MODEL=matcha-icefall-zh-en
 ```env
 VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_TTS_ENGINE=melotts    # VOICE_TTS_MODEL=vits-melo-tts-zh_en
 VOICE_TTS_ENGINE=sherpa     # VOICE_TTS_MODEL=matcha-icefall-zh-en
-VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
-VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT / CosyVoice-300M-Instruct
+VOICE_TTS_ENGINE=f5-tts     # VOICE_TTS_MODEL=F5TTS_v1_Base
 VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
-VOICE_TTS_DEVICE=cpu        # Sherpa/Piper 使用 CPU；CosyVoice 只允许 auto / cuda
+VOICE_TTS_DEVICE=cpu        # MeloTTS/Sherpa 使用 CPU；F5-TTS 可用 auto / cpu / cuda
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。Sherpa TTS、CosyVoice、Piper 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT、Piper CLI 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。MeloTTS、Sherpa TTS、F5-TTS 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

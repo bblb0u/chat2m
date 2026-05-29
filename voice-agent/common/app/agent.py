@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import inspect
 import os
 import re
 import threading
@@ -12,7 +11,7 @@ import wave
 from collections import deque
 from itertools import chain
 from pathlib import Path
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, Iterable, Protocol
 
 from app.runtime import DisplayClient, env_bool, env_float, env_int, env_value, log
@@ -90,13 +89,6 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
-PIPER_MODEL = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL / "model.onnx"
-PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
-PIPER_ESPEAK_DATA = Path(os.getenv("PIPER_ESPEAK_DATA", "/opt/piper/espeak-ng-data"))
-PIPER_SPEAKER = env_int("PIPER_SPEAKER")
-PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
-PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
-PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
 SHERPA_TTS_THREADS = env_int("SHERPA_TTS_THREADS")
 SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "cpu").strip().lower() or "cpu"
 SHERPA_TTS_SPEED = env_float("SHERPA_TTS_SPEED")
@@ -106,6 +98,19 @@ SHERPA_TTS_SILENCE_SCALE = env_float("SHERPA_TTS_SILENCE_SCALE")
 SHERPA_TTS_RULE_FSTS = tuple(
     item.strip()
     for item in os.getenv("SHERPA_TTS_RULE_FSTS", "").split(",")
+    if item.strip()
+)
+MELOTTS_THREADS = env_int("MELOTTS_THREADS")
+MELOTTS_PROVIDER = os.getenv("MELOTTS_PROVIDER", "cpu").strip().lower() or "cpu"
+MELOTTS_SPEAKER = env_int("MELOTTS_SPEAKER")
+MELOTTS_SPEED = env_float("MELOTTS_SPEED")
+MELOTTS_LENGTH_SCALE = env_float("MELOTTS_LENGTH_SCALE")
+MELOTTS_NOISE_SCALE = env_float("MELOTTS_NOISE_SCALE")
+MELOTTS_NOISE_W_SCALE = env_float("MELOTTS_NOISE_W_SCALE")
+MELOTTS_SILENCE_SCALE = env_float("MELOTTS_SILENCE_SCALE")
+MELOTTS_RULE_FSTS = tuple(
+    item.strip()
+    for item in os.getenv("MELOTTS_RULE_FSTS", "").split(",")
     if item.strip()
 )
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
@@ -123,18 +128,21 @@ TTS_WARMUP_TEXTS = tuple(
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cuda").strip().lower()
-COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文女"
-COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
-COSYVOICE_SPEED = env_float("COSYVOICE_SPEED")
-COSYVOICE_TEXT_FRONTEND = env_bool("COSYVOICE_TEXT_FRONTEND")
-COSYVOICE_STREAM = env_bool("COSYVOICE_STREAM")
-COSYVOICE_LOAD_JIT = env_bool("COSYVOICE_LOAD_JIT")
-COSYVOICE_LOAD_TRT = env_bool("COSYVOICE_LOAD_TRT")
-COSYVOICE_FP16 = env_bool("COSYVOICE_FP16")
-COSYVOICE_STREAM_TOKEN_HOP_LEN = int(os.getenv("COSYVOICE_STREAM_TOKEN_HOP_LEN", "20").strip() or "20")
-COSYVOICE_STREAM_TOKEN_OVERLAP_LEN = int(os.getenv("COSYVOICE_STREAM_TOKEN_OVERLAP_LEN", "20").strip() or "20")
-COSYVOICE_STREAM_SCALE_FACTOR = int(os.getenv("COSYVOICE_STREAM_SCALE_FACTOR", "1").strip() or "1")
-COSYVOICE_FLOW_STEPS = int(os.getenv("COSYVOICE_FLOW_STEPS", "10").strip() or "10")
+F5_TTS_CKPT_FILE = Path(os.getenv("F5_TTS_CKPT_FILE", str(TTS_MODEL_DIR / "model_1250000.safetensors")))
+F5_TTS_VOCODER_DIR = Path(os.getenv("F5_TTS_VOCODER_DIR", str(MODELS_DIR / "f5-tts" / "vocos-mel-24khz")))
+F5_TTS_REF_AUDIO_RAW = os.getenv("F5_TTS_REF_AUDIO", "").strip()
+F5_TTS_REF_AUDIO = Path(F5_TTS_REF_AUDIO_RAW) if F5_TTS_REF_AUDIO_RAW else None
+F5_TTS_REF_TEXT = os.getenv("F5_TTS_REF_TEXT", "对，这就是我，万人敬仰的太乙真人。").strip()
+F5_TTS_NFE_STEP = env_int("F5_TTS_NFE_STEP")
+F5_TTS_CFG_STRENGTH = env_float("F5_TTS_CFG_STRENGTH")
+F5_TTS_SWAY_SAMPLING_COEF = env_float("F5_TTS_SWAY_SAMPLING_COEF")
+F5_TTS_SPEED = env_float("F5_TTS_SPEED")
+F5_TTS_TARGET_RMS = env_float("F5_TTS_TARGET_RMS")
+F5_TTS_FP16 = env_bool("F5_TTS_FP16")
+F5_TTS_USE_EMA = env_bool("F5_TTS_USE_EMA")
+F5_TTS_ODE_METHOD = os.getenv("F5_TTS_ODE_METHOD", "euler").strip() or "euler"
+F5_TTS_SEED_RAW = os.getenv("F5_TTS_SEED", "").strip()
+F5_TTS_SEED = int(F5_TTS_SEED_RAW) if F5_TTS_SEED_RAW else None
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 WAKE_RESPONSE = env_value("WAKE_RESPONSE")
@@ -602,69 +610,6 @@ def play_wav(path: Path) -> None:
         log(f"aplay is unavailable: {exc}")
 
 
-class CosyVoiceTTS:
-    def __init__(self, model: Any) -> None:
-        self.model = model
-        sample_rate = int(getattr(model, "sample_rate", 22050) or 22050)
-        self.config = SimpleNamespace(sample_rate=sample_rate)
-
-    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
-        kwargs = {
-            "stream": COSYVOICE_STREAM,
-            "speed": COSYVOICE_SPEED,
-            "text_frontend": COSYVOICE_TEXT_FRONTEND,
-        }
-        if VOICE_TTS_MODEL.endswith("-Instruct"):
-            chunks = self.model.inference_instruct(text, COSYVOICE_SPK_ID, COSYVOICE_INSTRUCT_TEXT, **kwargs)
-        elif VOICE_TTS_MODEL.endswith("-SFT"):
-            chunks = self.model.inference_sft(text, COSYVOICE_SPK_ID, **kwargs)
-        else:
-            raise RuntimeError("use CosyVoice-300M-SFT or CosyVoice-300M-Instruct")
-
-        for chunk in chunks:
-            speech = chunk.get("tts_speech") if isinstance(chunk, dict) else chunk
-            yield tensor_audio_bytes(speech)
-
-
-class PiperTTS:
-    def __init__(self, sample_rate: int) -> None:
-        self.config = SimpleNamespace(sample_rate=sample_rate)
-
-    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
-        command = [
-            "piper",
-            "--model",
-            str(PIPER_MODEL),
-            "--config",
-            str(PIPER_CONFIG),
-            "--output_raw",
-            "--speaker",
-            str(PIPER_SPEAKER),
-            "--length_scale",
-            str(PIPER_LENGTH_SCALE),
-            "--noise_scale",
-            str(PIPER_NOISE_SCALE),
-            "--noise_w",
-            str(PIPER_NOISE_W_SCALE),
-            "--espeak_data",
-            str(PIPER_ESPEAK_DATA),
-            "--quiet",
-        ]
-        with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as process:
-            assert process.stdin is not None
-            assert process.stdout is not None
-            process.stdin.write((text.strip() + "\n").encode("utf-8"))
-            process.stdin.close()
-            while True:
-                chunk = process.stdout.read(4096)
-                if not chunk:
-                    break
-                yield chunk
-            return_code = process.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
-        if return_code != 0:
-            raise RuntimeError(f"piper exited with status {return_code}")
-
-
 class SherpaTTS:
     def __init__(self, tts: Any) -> None:
         self.tts = tts
@@ -674,6 +619,15 @@ class SherpaTTS:
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
         audio = self.tts.generate(text, sid=0, speed=SHERPA_TTS_SPEED)
         yield tensor_audio_bytes(audio.samples)
+
+
+class F5TextToSpeech:
+    def __init__(self, runtime: Any) -> None:
+        self.runtime = runtime
+        self.config = SimpleNamespace(sample_rate=runtime.sample_rate)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        yield tensor_audio_bytes(self.runtime.generate(text))
 
 
 class CachedTextToSpeech:
@@ -717,17 +671,6 @@ class CachedTextToSpeech:
         if text and text not in self.cache:
             for _ in self.synthesize_pcm(text):
                 pass
-
-
-def create_piper_tts() -> TextToSpeech:
-    require_file(PIPER_MODEL)
-    require_file(PIPER_CONFIG)
-    with PIPER_CONFIG.open("r", encoding="utf-8") as file:
-        config = yaml.safe_load(file) or {}
-    audio = config.get("audio") if isinstance(config, dict) else None
-    sample_rate = int((audio or {}).get("sample_rate") or 22050)
-    log(f"Piper TTS config: model={PIPER_MODEL} sample_rate={sample_rate} speaker={PIPER_SPEAKER}")
-    return PiperTTS(sample_rate)
 
 
 def create_sherpa_tts() -> TextToSpeech:
@@ -785,377 +728,101 @@ def create_sherpa_tts() -> TextToSpeech:
     return SherpaTTS(tts)
 
 
-def create_cosyvoice_tts() -> TextToSpeech:
-    cosyvoice_package = os.getenv("COSYVOICE_PACKAGE_PATH", "").strip()
-    if cosyvoice_package:
-        for path in reversed([part.strip() for part in cosyvoice_package.split(":") if part.strip()]):
-            if path not in sys.path:
-                sys.path.insert(0, path)
-    import torch
-    install_cosyvoice_inference_stubs()
-    patch_cosyvoice_onnxruntime_provider()
-    from cosyvoice.cli.cosyvoice import CosyVoice
+def create_melotts_tts() -> TextToSpeech:
+    import sherpa_onnx
 
-    require_file(TTS_MODEL_DIR / "cosyvoice.yaml")
-    require_file(TTS_MODEL_DIR / "flow.pt")
-    require_file(TTS_MODEL_DIR / "hift.pt")
-    require_file(TTS_MODEL_DIR / "llm.pt")
-    require_file(TTS_MODEL_DIR / "campplus.onnx")
-    require_file(TTS_MODEL_DIR / "speech_tokenizer_v1.onnx")
-    if VOICE_TTS_MODEL.endswith(("-SFT", "-Instruct")):
-        require_file(TTS_MODEL_DIR / "spk2info.pt")
-    if COSYVOICE_LOAD_JIT:
-        if not COSYVOICE_FP16:
-            raise RuntimeError("CosyVoice JIT acceleration is configured for fp16 only; set COSYVOICE_FP16=1")
-        require_file(TTS_MODEL_DIR / "llm.text_encoder.fp16.zip")
-        require_file(TTS_MODEL_DIR / "flow.encoder.fp16.zip")
-    if COSYVOICE_LOAD_TRT:
-        if not COSYVOICE_FP16:
-            raise RuntimeError("CosyVoice TRT acceleration is configured for fp16 only; set COSYVOICE_FP16=1")
-        plan_path = TTS_MODEL_DIR / "flow.decoder.estimator.fp16.mygpu.plan"
-        require_file(plan_path)
-        if plan_path.stat().st_size <= 0:
-            raise RuntimeError(f"missing required non-empty TensorRT plan: {plan_path}")
-        init_cosyvoice_tensorrt_plugins()
-    cuda_available = torch.cuda.is_available()
-    if VOICE_TTS_DEVICE not in {"auto", "cuda", "gpu"} and not VOICE_TTS_DEVICE.startswith("cuda:"):
-        raise RuntimeError("CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto.")
-    if not cuda_available:
-        raise RuntimeError(
-            "CosyVoice requires torch CUDA, "
-            f"but CUDA is not available: device={VOICE_TTS_DEVICE} "
-            f"torch={torch.__version__} cuda={torch.version.cuda}"
-        )
-    if VOICE_TTS_DEVICE.startswith("cuda:"):
-        device_index = VOICE_TTS_DEVICE.split(":", 1)[1]
-        if not device_index.isdigit():
-            raise RuntimeError("VOICE_TTS_DEVICE must be auto, cuda, gpu, or cuda:<index> for CosyVoice")
-        if int(device_index) >= torch.cuda.device_count():
-            raise RuntimeError(
-                f"VOICE_TTS_DEVICE={VOICE_TTS_DEVICE} is not available; "
-                f"torch sees {torch.cuda.device_count()} CUDA device(s)"
-            )
-        torch.cuda.set_device(int(device_index))
-    device = "cuda" if VOICE_TTS_DEVICE in {"auto", "gpu"} else VOICE_TTS_DEVICE
+    if VOICE_TTS_MODEL != "vits-melo-tts-zh_en":
+        raise RuntimeError("use MeloTTS model vits-melo-tts-zh_en")
+
+    model = TTS_MODEL_DIR / "model.onnx"
+    tokens = TTS_MODEL_DIR / "tokens.txt"
+    lexicon = TTS_MODEL_DIR / "lexicon.txt"
+    dict_dir = TTS_MODEL_DIR / "dict"
+    require_file(model)
+    require_file(tokens)
+    require_file(lexicon)
+    if not dict_dir.is_dir():
+        raise FileNotFoundError(f"missing required directory: {dict_dir}")
+    rule_fsts = []
+    for name in MELOTTS_RULE_FSTS:
+        path = TTS_MODEL_DIR / name
+        require_file(path)
+        rule_fsts.append(str(path))
+
     log(
-        "CosyVoice TTS config: "
-        f"model={TTS_MODEL_DIR} device={device} torch={torch.__version__} cuda={torch.version.cuda} "
-        f"cuda_available={cuda_available} speaker={COSYVOICE_SPK_ID} "
-        f"jit={COSYVOICE_LOAD_JIT} trt={COSYVOICE_LOAD_TRT} fp16={COSYVOICE_FP16} "
-        f"stream={COSYVOICE_STREAM} speed={COSYVOICE_SPEED} flow_steps={COSYVOICE_FLOW_STEPS}"
+        "MeloTTS config: "
+        f"model={TTS_MODEL_DIR} provider={MELOTTS_PROVIDER} threads={MELOTTS_THREADS} "
+        f"speaker={MELOTTS_SPEAKER} speed={MELOTTS_SPEED} length_scale={MELOTTS_LENGTH_SCALE} "
+        f"noise_scale={MELOTTS_NOISE_SCALE}"
     )
-    init_kwargs: dict[str, Any] = {}
-    signature = inspect.signature(CosyVoice)
-    if "load_jit" in signature.parameters:
-        init_kwargs["load_jit"] = False
-    if "load_onnx" in signature.parameters:
-        init_kwargs["load_onnx"] = False
-    if "load_trt" in signature.parameters:
-        init_kwargs["load_trt"] = COSYVOICE_LOAD_TRT
-    if "fp16" in signature.parameters:
-        init_kwargs["fp16"] = COSYVOICE_FP16
-    if "device" in signature.parameters:
-        init_kwargs["device"] = device
-    model = CosyVoice(str(TTS_MODEL_DIR), **init_kwargs)
-    load_cosyvoice_jit_modules(model)
-    tune_cosyvoice_streaming(model)
-    tune_cosyvoice_flow_steps(model)
-    available_spks = list(getattr(getattr(model, "frontend", None), "spk2info", {}).keys())
-    if available_spks and COSYVOICE_SPK_ID not in available_spks:
-        raise RuntimeError(
-            f"CosyVoice speaker '{COSYVOICE_SPK_ID}' is not available. "
-            f"Available speakers: {', '.join(available_spks)}"
-        )
-    return CosyVoiceTTS(model)
-
-
-def load_cosyvoice_jit_modules(model: Any) -> None:
-    if not COSYVOICE_LOAD_JIT:
-        return
-
-    import torch
-
-    inner_model = getattr(model, "model", None)
-    if inner_model is None:
-        return
-
-    inner_model.llm.text_encoder = torch.jit.load(
-        str(TTS_MODEL_DIR / "llm.text_encoder.fp16.zip"),
-        map_location=inner_model.device,
+    started = time.monotonic()
+    vits = sherpa_onnx.OfflineTtsVitsModelConfig(
+        model=str(model),
+        tokens=str(tokens),
+        lexicon=str(lexicon),
+        data_dir=str(TTS_MODEL_DIR),
+        noise_scale=MELOTTS_NOISE_SCALE,
+        noise_scale_w=MELOTTS_NOISE_W_SCALE,
+        length_scale=MELOTTS_LENGTH_SCALE,
     )
-    inner_model.flow.encoder = torch.jit.load(
-        str(TTS_MODEL_DIR / "flow.encoder.fp16.zip"),
-        map_location=inner_model.device,
+    model_config = sherpa_onnx.OfflineTtsModelConfig(
+        vits=vits,
+        num_threads=MELOTTS_THREADS,
+        provider=MELOTTS_PROVIDER,
     )
-    log("CosyVoice fp16 JIT loaded: llm.text_encoder, flow.encoder")
-
-
-def init_cosyvoice_tensorrt_plugins() -> None:
-    import tensorrt as trt
-
-    logger = trt.Logger(trt.Logger.WARNING)
-    trt.init_libnvinfer_plugins(logger, "")
-    log("CosyVoice TensorRT plugins initialized")
-
-
-def tune_cosyvoice_streaming(model: Any) -> None:
-    inner_model = getattr(model, "model", None)
-    if inner_model is None:
-        return
-    if COSYVOICE_STREAM_TOKEN_HOP_LEN > 0:
-        if hasattr(inner_model, "token_hop_len"):
-            inner_model.token_hop_len = COSYVOICE_STREAM_TOKEN_HOP_LEN
-        if hasattr(inner_model, "token_min_hop_len"):
-            inner_model.token_min_hop_len = COSYVOICE_STREAM_TOKEN_HOP_LEN
-        if hasattr(inner_model, "token_max_hop_len"):
-            inner_model.token_max_hop_len = max(COSYVOICE_STREAM_TOKEN_HOP_LEN, COSYVOICE_STREAM_TOKEN_HOP_LEN * 2)
-    if COSYVOICE_STREAM_TOKEN_OVERLAP_LEN > 0 and hasattr(inner_model, "token_overlap_len"):
-        inner_model.token_overlap_len = COSYVOICE_STREAM_TOKEN_OVERLAP_LEN
-        sample_rate = int(getattr(model, "sample_rate", 22050) or 22050)
-        input_frame_rate = int(getattr(getattr(inner_model, "flow", None), "input_frame_rate", 50) or 50)
-        inner_model.mel_overlap_len = int(COSYVOICE_STREAM_TOKEN_OVERLAP_LEN / input_frame_rate * sample_rate / 256)
-        inner_model.mel_window = np.hamming(2 * inner_model.mel_overlap_len)
-    if COSYVOICE_STREAM_SCALE_FACTOR > 0 and hasattr(inner_model, "stream_scale_factor"):
-        inner_model.stream_scale_factor = COSYVOICE_STREAM_SCALE_FACTOR
-    log(
-        "CosyVoice streaming tune: "
-        f"token_hop_len={getattr(inner_model, 'token_hop_len', 'n/a')} "
-        f"token_min_hop_len={getattr(inner_model, 'token_min_hop_len', 'n/a')} "
-        f"token_max_hop_len={getattr(inner_model, 'token_max_hop_len', 'n/a')} "
-        f"token_overlap_len={getattr(inner_model, 'token_overlap_len', 'n/a')} "
-        f"mel_overlap_len={getattr(inner_model, 'mel_overlap_len', 'n/a')} "
-        f"stream_scale_factor={getattr(inner_model, 'stream_scale_factor', 'n/a')}"
+    config = sherpa_onnx.OfflineTtsConfig(
+        model=model_config,
+        rule_fsts=",".join(rule_fsts),
+        max_num_sentences=1,
+        silence_scale=MELOTTS_SILENCE_SCALE,
     )
+    tts = sherpa_onnx.OfflineTts(config)
+    log(f"MeloTTS loaded: sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s")
+    return SherpaTTSWithSpeaker(tts, MELOTTS_SPEAKER, MELOTTS_SPEED)
 
 
-def tune_cosyvoice_flow_steps(model: Any) -> None:
-    if COSYVOICE_FLOW_STEPS <= 0:
-        raise RuntimeError("COSYVOICE_FLOW_STEPS must be greater than 0")
-    if COSYVOICE_FLOW_STEPS == 10:
-        return
+class SherpaTTSWithSpeaker(SherpaTTS):
+    def __init__(self, tts: Any, speaker: int, speed: float) -> None:
+        super().__init__(tts)
+        self.speaker = speaker
+        self.speed = speed
 
-    inner_model = getattr(model, "model", None)
-    flow = getattr(inner_model, "flow", None)
-    if flow is None:
-        return
-
-    import torch
-    import torch.nn.functional as F
-    from cosyvoice.utils.mask import make_pad_mask
-
-    @torch.inference_mode()
-    def inference_with_configured_steps(
-        self: Any,
-        token: Any,
-        token_len: Any,
-        prompt_token: Any,
-        prompt_token_len: Any,
-        prompt_feat: Any,
-        prompt_feat_len: Any,
-        embedding: Any,
-        flow_cache: Any,
-    ) -> tuple[Any, Any]:
-        assert token.shape[0] == 1
-        embedding = F.normalize(embedding, dim=1)
-        embedding = self.spk_embed_affine_layer(embedding)
-
-        token_len1, token_len2 = prompt_token.shape[1], token.shape[1]
-        token, token_len = torch.concat([prompt_token, token], dim=1), prompt_token_len + token_len
-        mask = (~make_pad_mask(token_len)).unsqueeze(-1).to(embedding)
-        token = self.input_embedding(torch.clamp(token, min=0)) * mask
-
-        h, _ = self.encoder(token, token_len)
-        h = self.encoder_proj(h)
-        mel_len1 = prompt_feat.shape[1]
-        mel_len2 = int(token_len2 / self.input_frame_rate * 22050 / 256)
-        h, _ = self.length_regulator.inference(h[:, :token_len1], h[:, token_len1:], mel_len1, mel_len2, self.input_frame_rate)
-
-        conds = torch.zeros([1, mel_len1 + mel_len2, self.output_size], device=token.device).to(h.dtype)
-        conds[:, :mel_len1] = prompt_feat
-        conds = conds.transpose(1, 2)
-
-        mask = (~make_pad_mask(torch.tensor([mel_len1 + mel_len2]))).to(h)
-        if flow_cache is not None and flow_cache.shape[2] > h.shape[1]:
-            flow_cache = flow_cache[:, :, -h.shape[1]:, :]
-        feat, flow_cache = self.decoder(
-            mu=h.transpose(1, 2).contiguous(),
-            mask=mask.unsqueeze(1),
-            spks=embedding,
-            cond=conds,
-            n_timesteps=COSYVOICE_FLOW_STEPS,
-            prompt_len=mel_len1,
-            cache=flow_cache,
-        )
-        feat = feat[:, :, mel_len1:]
-        assert feat.shape[2] == mel_len2
-        return feat.float(), flow_cache
-
-    flow.inference = MethodType(inference_with_configured_steps, flow)
-    log(f"CosyVoice flow diffusion steps: {COSYVOICE_FLOW_STEPS}")
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        audio = self.tts.generate(text, sid=self.speaker, speed=self.speed)
+        yield tensor_audio_bytes(audio.samples)
 
 
-def patch_cosyvoice_onnxruntime_provider() -> None:
-    import onnxruntime
+def create_f5_tts() -> TextToSpeech:
+    from app.f5_tts_runtime import F5TTSRuntime
 
-    if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
-        return
-    if getattr(onnxruntime.InferenceSession, "_chat2m_provider_patch", False):
-        return
-
-    original_inference_session = onnxruntime.InferenceSession
-
-    def inference_session(*args: Any, **kwargs: Any) -> Any:
-        providers = kwargs.get("providers")
-        if providers and "CUDAExecutionProvider" in providers:
-            kwargs["providers"] = [provider for provider in providers if provider != "CUDAExecutionProvider"]
-            if "CPUExecutionProvider" not in kwargs["providers"]:
-                kwargs["providers"].append("CPUExecutionProvider")
-        return original_inference_session(*args, **kwargs)
-
-    inference_session._chat2m_provider_patch = True
-    onnxruntime.InferenceSession = inference_session
-    log("CosyVoice ONNX frontend using CPUExecutionProvider; onnxruntime CUDAExecutionProvider is unavailable")
-
-
-def install_cosyvoice_inference_stubs() -> None:
-    import importlib
-    import importlib.machinery
-    import importlib.util
-    import types
-
-    install_torchaudio_stub()
-    install_wetext_stub()
-
-    try:
-        dataset_package = importlib.import_module("cosyvoice.dataset")
-    except Exception:
-        return
-
-    processor = types.ModuleType("cosyvoice.dataset.processor")
-
-    def unused_processor(*args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("CosyVoice dataset processor is not available in inference runtime")
-
-    for name in (
-        "parquet_opener",
-        "tokenize",
-        "filter",
-        "resample",
-        "compute_fbank",
-        "parse_embedding",
-        "shuffle",
-        "sort",
-        "batch",
-        "padding",
-    ):
-        setattr(processor, name, unused_processor)
-    sys.modules["cosyvoice.dataset.processor"] = processor
-    setattr(dataset_package, "processor", processor)
-
-    pylogger = types.ModuleType("matcha.utils.pylogger")
-
-    def get_pylogger(name: str = __name__) -> Any:
-        import logging
-
-        return logging.getLogger(name)
-
-    pylogger.get_pylogger = get_pylogger
-    sys.modules["matcha.utils.pylogger"] = pylogger
-
-    def noop(*args: Any, **kwargs: Any) -> Any:
-        return None
-
-    instantiators = types.ModuleType("matcha.utils.instantiators")
-    instantiators.instantiate_callbacks = lambda *args, **kwargs: []
-    instantiators.instantiate_loggers = lambda *args, **kwargs: []
-
-    logging_utils = types.ModuleType("matcha.utils.logging_utils")
-    logging_utils.log_hyperparameters = noop
-
-    rich_utils = types.ModuleType("matcha.utils.rich_utils")
-    rich_utils.enforce_tags = noop
-    rich_utils.print_config_tree = noop
-
-    utils = types.ModuleType("matcha.utils.utils")
-    utils.extras = noop
-    utils.get_metric_value = lambda *args, **kwargs: 0.0
-    utils.task_wrapper = lambda func: func
-
-    sys.modules["matcha.utils.instantiators"] = instantiators
-    sys.modules["matcha.utils.logging_utils"] = logging_utils
-    sys.modules["matcha.utils.rich_utils"] = rich_utils
-    sys.modules["matcha.utils.utils"] = utils
-
-
-def install_wetext_stub() -> None:
-    import importlib.machinery
-    import importlib.util
-    import types
-
-    if "wetext" in sys.modules or importlib.util.find_spec("wetext") is not None:
-        return
-    if COSYVOICE_TEXT_FRONTEND:
-        raise RuntimeError("COSYVOICE_TEXT_FRONTEND=1 requires wetext or ttsfrd in the speech image")
-
-    wetext = types.ModuleType("wetext")
-    wetext.__spec__ = importlib.machinery.ModuleSpec("wetext", loader=None)
-
-    class Normalizer:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def normalize(self, text: str, *args: Any, **kwargs: Any) -> str:
-            return text
-
-    wetext.Normalizer = Normalizer
-    sys.modules["wetext"] = wetext
-
-
-def install_torchaudio_stub() -> None:
-    import importlib.machinery
-    import types
-
-    if "torchaudio" in sys.modules:
-        return
-
-    torchaudio = types.ModuleType("torchaudio")
-    compliance = types.ModuleType("torchaudio.compliance")
-    kaldi = types.ModuleType("torchaudio.compliance.kaldi")
-    transforms = types.ModuleType("torchaudio.transforms")
-    torchaudio.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
-    compliance.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance", loader=None)
-    kaldi.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance.kaldi", loader=None)
-    transforms.__spec__ = importlib.machinery.ModuleSpec("torchaudio.transforms", loader=None)
-
-    def unavailable(*args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("torchaudio is not available in CosyVoice SFT inference runtime")
-
-    class Resample:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def __call__(self, speech: Any) -> Any:
-            return speech
-
-    kaldi.fbank = unavailable
-    torchaudio.load = unavailable
-    transforms.Resample = Resample
-    compliance.kaldi = kaldi
-    torchaudio.compliance = compliance
-    torchaudio.transforms = transforms
-    sys.modules["torchaudio"] = torchaudio
-    sys.modules["torchaudio.compliance"] = compliance
-    sys.modules["torchaudio.compliance.kaldi"] = kaldi
-    sys.modules["torchaudio.transforms"] = transforms
+    runtime = F5TTSRuntime(
+        model_name=VOICE_TTS_MODEL,
+        model_dir=TTS_MODEL_DIR,
+        ckpt_file=F5_TTS_CKPT_FILE,
+        vocoder_dir=F5_TTS_VOCODER_DIR,
+        ref_audio=F5_TTS_REF_AUDIO,
+        ref_text=F5_TTS_REF_TEXT,
+        device=VOICE_TTS_DEVICE,
+        fp16=F5_TTS_FP16,
+        use_ema=F5_TTS_USE_EMA,
+        ode_method=F5_TTS_ODE_METHOD,
+        nfe_step=F5_TTS_NFE_STEP,
+        cfg_strength=F5_TTS_CFG_STRENGTH,
+        sway_sampling_coef=F5_TTS_SWAY_SAMPLING_COEF,
+        speed=F5_TTS_SPEED,
+        target_rms=F5_TTS_TARGET_RMS,
+        seed=F5_TTS_SEED,
+    )
+    return F5TextToSpeech(runtime)
 
 
 def create_tts() -> tuple[TextToSpeech, None]:
+    if VOICE_TTS_ENGINE == "melotts":
+        return wrap_tts(create_melotts_tts()), None
     if VOICE_TTS_ENGINE == "sherpa":
         return wrap_tts(create_sherpa_tts()), None
-    if VOICE_TTS_ENGINE == "piper":
-        return wrap_tts(create_piper_tts()), None
-    if VOICE_TTS_ENGINE == "cosyvoice":
-        return wrap_tts(create_cosyvoice_tts()), None
+    if VOICE_TTS_ENGINE == "f5-tts":
+        return wrap_tts(create_f5_tts()), None
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
 
 
