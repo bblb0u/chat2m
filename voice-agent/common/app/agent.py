@@ -97,12 +97,23 @@ PIPER_SPEAKER = env_int("PIPER_SPEAKER")
 PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
 PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
 PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
+SHERPA_TTS_THREADS = env_int("SHERPA_TTS_THREADS")
+SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "cpu").strip().lower() or "cpu"
+SHERPA_TTS_SPEED = env_float("SHERPA_TTS_SPEED")
+SHERPA_TTS_LENGTH_SCALE = env_float("SHERPA_TTS_LENGTH_SCALE")
+SHERPA_TTS_NOISE_SCALE = env_float("SHERPA_TTS_NOISE_SCALE")
+SHERPA_TTS_SILENCE_SCALE = env_float("SHERPA_TTS_SILENCE_SCALE")
+SHERPA_TTS_RULE_FSTS = tuple(
+    item.strip()
+    for item in os.getenv("SHERPA_TTS_RULE_FSTS", "").split(",")
+    if item.strip()
+)
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
 SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
 TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
 TTS_CACHE_MAX_ITEMS = env_int("TTS_CACHE_MAX_ITEMS")
 TTS_CACHE_MAX_BYTES = env_int("TTS_CACHE_MAX_BYTES")
-TTS_PLAYBACK_MODE = os.getenv("TTS_PLAYBACK_MODE", "stream").strip().lower()
+TTS_PLAYBACK_MODE = os.getenv("TTS_PLAYBACK_MODE", "buffered").strip().lower()
 TTS_PREBUFFER_SECONDS = float(os.getenv("TTS_PREBUFFER_SECONDS", "2.4").strip() or "2.4")
 TTS_WARMUP_TEXTS = tuple(
     text.strip()
@@ -116,6 +127,7 @@ COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文
 COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
 COSYVOICE_SPEED = env_float("COSYVOICE_SPEED")
 COSYVOICE_TEXT_FRONTEND = env_bool("COSYVOICE_TEXT_FRONTEND")
+COSYVOICE_STREAM = env_bool("COSYVOICE_STREAM")
 COSYVOICE_LOAD_JIT = env_bool("COSYVOICE_LOAD_JIT")
 COSYVOICE_LOAD_TRT = env_bool("COSYVOICE_LOAD_TRT")
 COSYVOICE_FP16 = env_bool("COSYVOICE_FP16")
@@ -335,7 +347,7 @@ class SenseVoiceStreamingRecognizer:
         self.model = model
 
     def create_stream(self) -> dict[str, Any]:
-        from sense_voice_streaming_asr.sense_voice_streaming_asr import StreamingASREventType
+        StreamingASREventType = load_sensevoice_streaming_module().StreamingASREventType
 
         stream: dict[str, Any] = {
             "committed": "",
@@ -417,8 +429,10 @@ def create_sensevoice_asr() -> StreamingRecognizer:
     import kaldi_native_fbank as knf
     import onnxruntime
     from sense_voice_streaming_asr.cmvn_utils import load_cmvn
-    from sense_voice_streaming_asr.sense_voice_streaming_asr import SenseVoiceStreamingASR, StreamingASRConfig
-    from sense_voice_streaming_asr.model_data import SenseVoiceModel, VadModel
+
+    sensevoice_module = load_sensevoice_streaming_module()
+    SenseVoiceStreamingASR = sensevoice_module.SenseVoiceStreamingASR
+    StreamingASRConfig = sensevoice_module.StreamingASRConfig
 
     require_file(SENSEVOICE_MODEL_DIR / "model_quant.onnx")
     require_file(SENSEVOICE_MODEL_DIR / "am.mvn")
@@ -474,7 +488,7 @@ def create_sensevoice_asr() -> StreamingRecognizer:
         fbank_opts.mel_opts.debug_mel = False
         return fbank_opts
 
-    asr_model = SenseVoiceModel.__new__(SenseVoiceModel)
+    asr_model = SimpleNamespace()
     asr_model.cmvn = load_cmvn(str(SENSEVOICE_MODEL_DIR / "am.mvn"))
     asr_model.sensevoice_tokens = json.loads((SENSEVOICE_MODEL_DIR / "tokens.json").read_text(encoding="utf-8"))
     asr_model.model_inference_session = onnxruntime.InferenceSession(
@@ -495,7 +509,7 @@ def create_sensevoice_asr() -> StreamingRecognizer:
         "nospeech": 13,
     }
 
-    vad_model = VadModel.__new__(VadModel)
+    vad_model = SimpleNamespace()
     vad_model.cmvn = load_cmvn(str(vad_cmvn_path))
     vad_model.model_inference_session = onnxruntime.InferenceSession(
         str(SENSEVOICE_VAD_MODEL_DIR / "model_quant.onnx"),
@@ -512,6 +526,46 @@ def create_sensevoice_asr() -> StreamingRecognizer:
         config=config,
     )
     return SenseVoiceStreamingRecognizer(model)
+
+
+def install_sensevoice_model_data_stub() -> None:
+    import types
+
+    module_name = "sense_voice_streaming_asr.model_data"
+    if module_name in sys.modules:
+        return
+    module = types.ModuleType(module_name)
+
+    class SenseVoiceModel:
+        pass
+
+    class VadModel:
+        pass
+
+    module.SenseVoiceModel = SenseVoiceModel
+    module.VadModel = VadModel
+    sys.modules[module_name] = module
+
+
+def load_sensevoice_streaming_module() -> Any:
+    module_name = "sense_voice_streaming_asr.sense_voice_streaming_asr"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+
+    import sense_voice_streaming_asr
+
+    install_sensevoice_model_data_stub()
+    package_dir = Path(sense_voice_streaming_asr.__file__).parent
+    source_path = package_dir / "sense_voice_streaming_asr.py"
+    source = source_path.read_text(encoding="utf-8")
+    patched_source = "from __future__ import annotations\nimport logging\n" + source
+    module = type(sys)(module_name)
+    module.__file__ = str(source_path)
+    module.__package__ = "sense_voice_streaming_asr"
+    sys.modules[module_name] = module
+    exec(compile(patched_source, str(source_path), "exec"), module.__dict__)
+    return module
 
 
 def create_asr() -> StreamingRecognizer:
@@ -551,7 +605,7 @@ class CosyVoiceTTS:
 
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
         kwargs = {
-            "stream": True,
+            "stream": COSYVOICE_STREAM,
             "speed": COSYVOICE_SPEED,
             "text_frontend": COSYVOICE_TEXT_FRONTEND,
         }
@@ -606,6 +660,17 @@ class PiperTTS:
             raise RuntimeError(f"piper exited with status {return_code}")
 
 
+class SherpaTTS:
+    def __init__(self, tts: Any) -> None:
+        self.tts = tts
+        sample_rate = int(getattr(tts, "sample_rate", 16000) or 16000)
+        self.config = SimpleNamespace(sample_rate=sample_rate)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        audio = self.tts.generate(text, sid=0, speed=SHERPA_TTS_SPEED)
+        yield tensor_audio_bytes(audio.samples)
+
+
 class CachedTextToSpeech:
     def __init__(self, voice: TextToSpeech, max_items: int, max_bytes: int) -> None:
         self.voice = voice
@@ -658,6 +723,61 @@ def create_piper_tts() -> TextToSpeech:
     sample_rate = int((audio or {}).get("sample_rate") or 22050)
     log(f"Piper TTS config: model={PIPER_MODEL} sample_rate={sample_rate} speaker={PIPER_SPEAKER}")
     return PiperTTS(sample_rate)
+
+
+def create_sherpa_tts() -> TextToSpeech:
+    import sherpa_onnx
+
+    if VOICE_TTS_MODEL != "matcha-icefall-zh-en":
+        raise RuntimeError("use sherpa TTS model matcha-icefall-zh-en")
+
+    acoustic_model = TTS_MODEL_DIR / "model-steps-3.onnx"
+    vocoder = TTS_MODEL_DIR / "vocos-16khz-univ.onnx"
+    tokens = TTS_MODEL_DIR / "tokens.txt"
+    lexicon = TTS_MODEL_DIR / "lexicon.txt"
+    data_dir = TTS_MODEL_DIR / "espeak-ng-data"
+    require_file(acoustic_model)
+    require_file(vocoder)
+    require_file(tokens)
+    require_file(lexicon)
+    if not data_dir.is_dir():
+        raise FileNotFoundError(f"missing required directory: {data_dir}")
+    rule_fsts = []
+    for name in SHERPA_TTS_RULE_FSTS:
+        path = TTS_MODEL_DIR / name
+        require_file(path)
+        rule_fsts.append(str(path))
+
+    log(
+        "Sherpa TTS config: "
+        f"model={TTS_MODEL_DIR} provider={SHERPA_TTS_PROVIDER} threads={SHERPA_TTS_THREADS} "
+        f"speed={SHERPA_TTS_SPEED} length_scale={SHERPA_TTS_LENGTH_SCALE} "
+        f"noise_scale={SHERPA_TTS_NOISE_SCALE}"
+    )
+    started = time.monotonic()
+    matcha = sherpa_onnx.OfflineTtsMatchaModelConfig(
+        acoustic_model=str(acoustic_model),
+        vocoder=str(vocoder),
+        tokens=str(tokens),
+        lexicon=str(lexicon),
+        data_dir=str(data_dir),
+        length_scale=SHERPA_TTS_LENGTH_SCALE,
+        noise_scale=SHERPA_TTS_NOISE_SCALE,
+    )
+    model_config = sherpa_onnx.OfflineTtsModelConfig(
+        matcha=matcha,
+        num_threads=SHERPA_TTS_THREADS,
+        provider=SHERPA_TTS_PROVIDER,
+    )
+    config = sherpa_onnx.OfflineTtsConfig(
+        model=model_config,
+        rule_fsts=",".join(rule_fsts),
+        max_num_sentences=1,
+        silence_scale=SHERPA_TTS_SILENCE_SCALE,
+    )
+    tts = sherpa_onnx.OfflineTts(config)
+    log(f"Sherpa TTS loaded: sample_rate={tts.sample_rate} elapsed={time.monotonic() - started:.2f}s")
+    return SherpaTTS(tts)
 
 
 def create_cosyvoice_tts() -> TextToSpeech:
@@ -716,7 +836,8 @@ def create_cosyvoice_tts() -> TextToSpeech:
         "CosyVoice TTS config: "
         f"model={TTS_MODEL_DIR} device={device} torch={torch.__version__} cuda={torch.version.cuda} "
         f"cuda_available={cuda_available} speaker={COSYVOICE_SPK_ID} "
-        f"jit={COSYVOICE_LOAD_JIT} trt={COSYVOICE_LOAD_TRT} fp16={COSYVOICE_FP16}"
+        f"jit={COSYVOICE_LOAD_JIT} trt={COSYVOICE_LOAD_TRT} fp16={COSYVOICE_FP16} "
+        f"stream={COSYVOICE_STREAM} speed={COSYVOICE_SPEED} flow_steps={COSYVOICE_FLOW_STEPS}"
     )
     init_kwargs: dict[str, Any] = {}
     signature = inspect.signature(CosyVoice)
@@ -1024,6 +1145,8 @@ def install_torchaudio_stub() -> None:
 
 
 def create_tts() -> tuple[TextToSpeech, None]:
+    if VOICE_TTS_ENGINE == "sherpa":
+        return wrap_tts(create_sherpa_tts()), None
     if VOICE_TTS_ENGINE == "piper":
         return wrap_tts(create_piper_tts()), None
     if VOICE_TTS_ENGINE == "cosyvoice":

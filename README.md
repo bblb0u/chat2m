@@ -179,11 +179,19 @@ ASR/TTS 大模型不打进镜像，避免镜像本身过大。默认链路只需
 ```env
 VOICE_ASR_ENGINE=sensevoice
 VOICE_ASR_MODEL=SenseVoiceSmall
-VOICE_TTS_ENGINE=cosyvoice
-VOICE_TTS_MODEL=CosyVoice-300M-SFT
+VOICE_TTS_ENGINE=sherpa
+VOICE_TTS_MODEL=matcha-icefall-zh-en
 ```
 
-默认配置是 SenseVoice 流式 ASR + CosyVoice 流式 TTS，CosyVoice 必须启用 GPU。`chat2m-speech` 会用 Docker `nvidia` runtime 启动；只要选择 `VOICE_TTS_ENGINE=cosyvoice`，启动时就会强制校验 `torch.cuda.is_available()`，CUDA 不可用时直接启动失败，不会退回 CPU：
+默认配置是 SenseVoice 流式 ASR + Sherpa ONNX TTS。TTS 默认整段合成后播放，避免慢速模型边合成边播放时卡顿：
+
+```env
+VOICE_TTS_ENGINE=sherpa
+VOICE_TTS_MODEL=matcha-icefall-zh-en
+TTS_PLAYBACK_MODE=buffered
+```
+
+CosyVoice 仍然可以按配置切换，但必须启用 GPU。`chat2m-speech` 会用 Docker `nvidia` runtime 启动；只要选择 `VOICE_TTS_ENGINE=cosyvoice`，启动时就会强制校验 `torch.cuda.is_available()`，CUDA 不可用时直接启动失败，不会退回 CPU：
 
 ```env
 VOICE_ASR_ENGINE=sensevoice
@@ -193,6 +201,8 @@ VOICE_TTS_ENGINE=cosyvoice
 VOICE_TTS_MODEL=CosyVoice-300M-SFT
 VOICE_TTS_DEVICE=cuda
 COSYVOICE_FP16=1
+COSYVOICE_STREAM=0
+TTS_PLAYBACK_MODE=buffered
 ```
 
 轻量 CPU 链路仍然可以按配置切换，不需要重建镜像：
@@ -200,8 +210,8 @@ COSYVOICE_FP16=1
 ```env
 VOICE_ASR_ENGINE=sherpa
 VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
-VOICE_TTS_ENGINE=piper
-VOICE_TTS_MODEL=zh_CN-huayan-medium
+VOICE_TTS_ENGINE=sherpa
+VOICE_TTS_MODEL=matcha-icefall-zh-en
 ```
 
 目前内置可选项：
@@ -209,13 +219,14 @@ VOICE_TTS_MODEL=zh_CN-huayan-medium
 ```env
 VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_TTS_ENGINE=sherpa     # VOICE_TTS_MODEL=matcha-icefall-zh-en
 VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
 VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT / CosyVoice-300M-Instruct
 VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
-VOICE_TTS_DEVICE=cuda       # CosyVoice 只允许 auto / cuda；Piper 使用 CPU
+VOICE_TTS_DEVICE=cpu        # Sherpa/Piper 使用 CPU；CosyVoice 只允许 auto / cuda
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice、Piper 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT、Piper CLI 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。Sherpa TTS、CosyVoice、Piper 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT、Piper CLI 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

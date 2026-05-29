@@ -94,8 +94,21 @@ resolve_asr_model() {
 }
 
 resolve_tts_model() {
-  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-cosyvoice}")"
+  VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-sherpa}")"
   case "$VOICE_TTS_ENGINE" in
+    sherpa)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-matcha-icefall-zh-en}"
+      case "$VOICE_TTS_MODEL" in
+        matcha-icefall-zh-en)
+          SHERPA_TTS_MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2"
+          SHERPA_TTS_VOCODER_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx"
+          SHERPA_TTS_REQUIRED_FILES="model-steps-3.onnx,vocos-16khz-univ.onnx,tokens.txt,lexicon.txt,phone-zh.fst,date-zh.fst,number-zh.fst"
+          ;;
+        *)
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "matcha-icefall-zh-en"
+          ;;
+      esac
+      ;;
     piper)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
       case "$VOICE_TTS_MODEL" in
@@ -127,7 +140,7 @@ resolve_tts_model() {
       esac
       ;;
     *)
-      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "piper, cosyvoice"
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "sherpa, piper, cosyvoice"
       ;;
   esac
 }
@@ -306,6 +319,16 @@ piper_model_ok() {
     "$PIPER_DIR/model.onnx" \
     "$PIPER_DIR/model.onnx.json" \
     && piper_runtime_ok
+}
+
+sherpa_tts_runtime_ok() {
+  python_module_ok sherpa_onnx
+}
+
+sherpa_tts_model_ok() {
+  required_relative_files_ok "$TTS_MODEL_DIR" "$SHERPA_TTS_REQUIRED_FILES" \
+    && [ -d "$TTS_MODEL_DIR/espeak-ng-data" ] \
+    && sherpa_tts_runtime_ok
 }
 
 dir_has_files() {
@@ -697,6 +720,13 @@ ensure_piper_runtime() {
     || missing_image_dependency "Piper espeak-ng data directory '${PIPER_ESPEAK_DATA:-/opt/piper/espeak-ng-data}'"
 }
 
+ensure_sherpa_tts_runtime() {
+  if sherpa_tts_runtime_ok; then
+    return
+  fi
+  missing_image_dependency "Sherpa ONNX TTS runtime"
+}
+
 sensevoice_runtime_ok() {
   python_module_ok sense_voice_streaming_asr \
     && python_module_ok onnxruntime \
@@ -757,6 +787,7 @@ ensure_selected_runtimes() {
       sensevoice) ensure_sensevoice_runtime ;;
     esac
     case "$VOICE_TTS_ENGINE" in
+      sherpa) ensure_sherpa_tts_runtime ;;
       piper) ensure_piper_runtime ;;
       cosyvoice) ensure_cosyvoice_runtime ;;
     esac
@@ -981,6 +1012,23 @@ ensure_piper_model() {
   fi
 }
 
+ensure_sherpa_tts_model() {
+  if sherpa_tts_model_ok; then
+    echo "sherpa $VOICE_TTS_MODEL is ready"
+    return
+  fi
+
+  echo "sherpa $VOICE_TTS_MODEL is missing or invalid; re-downloading"
+  download_and_extract "$VOICE_TTS_MODEL" "$SHERPA_TTS_MODEL_URL" "$TTS_MODEL_DIR"
+  download_with_progress "$TTS_MODEL_DIR/vocos-16khz-univ.onnx" "$SHERPA_TTS_VOCODER_URL" "vocos-16khz-univ.onnx"
+
+  echo "[models] validating sherpa $VOICE_TTS_MODEL"
+  if ! sherpa_tts_model_ok; then
+    echo "sherpa $VOICE_TTS_MODEL is still invalid after download" >&2
+    exit 1
+  fi
+}
+
 init_config
 load_runtime_env
 
@@ -1010,6 +1058,7 @@ if model_selected speech; then
     sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
   esac
   case "$VOICE_TTS_ENGINE" in
+    sherpa) MODEL_SET="$MODEL_SET,sherpa-tts" ;;
     piper) MODEL_SET="$MODEL_SET,piper" ;;
     cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
   esac
@@ -1060,6 +1109,10 @@ fi
 
 if model_selected piper; then
   ensure_piper_model
+fi
+
+if model_selected sherpa-tts; then
+  ensure_sherpa_tts_model
 fi
 
 if model_selected sensevoice; then
