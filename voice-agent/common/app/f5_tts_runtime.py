@@ -76,11 +76,15 @@ def install_torchaudio_shim() -> None:
 
     torchaudio = types.ModuleType("torchaudio")
     transforms = types.ModuleType("torchaudio.transforms")
+    compliance = types.ModuleType("torchaudio.compliance")
+    kaldi = types.ModuleType("torchaudio.compliance.kaldi")
     functional_pkg = types.ModuleType("torchaudio.functional")
     functional = types.ModuleType("torchaudio.functional.functional")
 
     torchaudio.__spec__ = importlib.machinery.ModuleSpec("torchaudio", loader=None)
     transforms.__spec__ = importlib.machinery.ModuleSpec("torchaudio.transforms", loader=None)
+    compliance.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance", loader=None)
+    kaldi.__spec__ = importlib.machinery.ModuleSpec("torchaudio.compliance.kaldi", loader=None)
     functional_pkg.__spec__ = importlib.machinery.ModuleSpec("torchaudio.functional", loader=None)
     functional.__spec__ = importlib.machinery.ModuleSpec("torchaudio.functional.functional", loader=None)
 
@@ -179,16 +183,25 @@ def install_torchaudio_shim() -> None:
     transforms.Resample = Resample
     functional._hz_to_mel = hz_to_mel
     functional._mel_to_hz = mel_to_hz
+    kaldi.fbank = _missing_torchaudio_compliance
+    compliance.kaldi = kaldi
     functional_pkg.functional = functional
     torchaudio.transforms = transforms
+    torchaudio.compliance = compliance
     torchaudio.functional = functional_pkg
     torchaudio.load = load
     torchaudio.save = save
 
     sys.modules["torchaudio"] = torchaudio
     sys.modules["torchaudio.transforms"] = transforms
+    sys.modules["torchaudio.compliance"] = compliance
+    sys.modules["torchaudio.compliance.kaldi"] = kaldi
     sys.modules["torchaudio.functional"] = functional_pkg
     sys.modules["torchaudio.functional.functional"] = functional
+
+
+def _missing_torchaudio_compliance(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("torchaudio.compliance is not available in this inference image")
 
 
 def package_file(package: str, relative_path: str) -> Path:

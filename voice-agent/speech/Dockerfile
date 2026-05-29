@@ -2,6 +2,8 @@ FROM ubuntu:20.04
 
 ARG JETSON_L4T_PLATFORM=t234
 ARG JETSON_TORCH_WHEEL_URL=https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
+ARG COSYVOICE_GIT_REF=v2.0
+ARG VOICE_AGENT_FEATURES="sensevoice sherpa piper melotts f5-tts cosyvoice online"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -10,115 +12,31 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-      alsa-utils \
-      ca-certificates \
-      curl \
-      ffmpeg \
-      git \
-      libasound2 \
-      libgomp1 \
-      libopenblas-base \
-      libportaudio2 \
-      libsndfile1 \
-      libusb-1.0-0 \
-      portaudio19-dev \
-      python3 \
-      python3-dev \
-      python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL --retry 5 --connect-timeout 20 https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
-      -o /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
-    && printf '%s\n' \
-      'deb https://repo.download.nvidia.com/jetson/common r35.6 main' \
-      "deb https://repo.download.nvidia.com/jetson/${JETSON_L4T_PLATFORM} r35.6 main" \
-      > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-      cuda-cudart-11-4 \
-      cuda-cupti-11-4 \
-      cuda-nvrtc-11-4 \
-      cuda-nvtx-11-4 \
-      libcublas-11-4 \
-      libcudla-11-4 \
-      libcufft-11-4 \
-      libcudnn8 \
-      libcurand-11-4 \
-      libcusolver-11-4 \
-      libcusparse-11-4 \
-      libnpp-11-4 \
-      libnvinfer-bin \
-      libnvinfer-plugin8 \
-      libnvinfer8 \
-      libnvonnxparsers8 \
-      libnvparsers8 \
-      python3-libnvinfer \
-      tensorrt-libs \
-    && rm -rf /var/lib/apt/lists/*
+COPY voice-agent/deps/install-apt-base.sh /opt/chat2m-deps/install-apt-base.sh
+RUN chmod +x /opt/chat2m-deps/install-apt-base.sh \
+    && /opt/chat2m-deps/install-apt-base.sh
 
 COPY voice-agent/requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps "$JETSON_TORCH_WHEEL_URL" \
-    && python3 -m pip install --no-cache-dir \
-      "einops==0.8.0" \
-      "importlib_resources" \
-      "kaldi_native_fbank" \
-      "librosa==0.10.2" \
-      "onnx==1.16.1" \
-      "onnxruntime==1.16.3" \
-      "regex" \
-      "rjieba==0.2.1" \
-      "safetensors" \
-      "scipy==1.10.1" \
-      "sense-voice-streaming-asr==0.1.1" \
-      "sentencepiece" \
-      "sherpa-onnx==1.12.38" \
-      "soundfile" \
-      "torchdiffeq==0.2.5" \
-      "x-transformers==1.31.14" \
-    && python3 -m pip install --no-cache-dir --no-deps \
-      "vocos==0.1.0" \
-      "f5-tts==1.1.20"
+COPY voice-agent/deps /opt/chat2m-deps
+RUN chmod +x /opt/chat2m-deps/*.sh
 
-RUN python3 - <<'PY'
-from pathlib import Path
-
-import sense_voice_streaming_asr
-
-package_dir = Path(sense_voice_streaming_asr.__file__).resolve().parent
-
-main_path = package_dir / "sense_voice_streaming_asr.py"
-if main_path.is_file():
-    text = main_path.read_text(encoding="utf-8")
-    if "from __future__ import annotations" not in text.splitlines()[:5]:
-        main_path.write_text("from __future__ import annotations\n" + text, encoding="utf-8")
-
-model_data_path = package_dir / "model_data.py"
-if model_data_path.is_file():
-    text = model_data_path.read_text(encoding="utf-8")
-    old = """        with (
-            SENSEVOICE_CMVN_PATH as cmvn_path,
-            SENSEVOICE_TOKENS_PATH as tokens_json_path,
-            SENSEVOICE_MODEL_PATH as model_path,
-        ):
-"""
-    new = """        with SENSEVOICE_CMVN_PATH as cmvn_path, \\
-                SENSEVOICE_TOKENS_PATH as tokens_json_path, \\
-                SENSEVOICE_MODEL_PATH as model_path:
-"""
-    if old in text:
-        model_data_path.write_text(text.replace(old, new), encoding="utf-8")
-PY
+RUN JETSON_L4T_PLATFORM="$JETSON_L4T_PLATFORM" \
+    JETSON_TORCH_WHEEL_URL="$JETSON_TORCH_WHEEL_URL" \
+    COSYVOICE_GIT_REF="$COSYVOICE_GIT_REF" \
+    /opt/chat2m-deps/install-selected.sh "$VOICE_AGENT_FEATURES"
 
 COPY config /defaults/config
 COPY voice-agent/entrypoint.sh /entrypoint.sh
 COPY voice-agent/common/app ./app
 COPY voice-agent/speech/app ./app
 
-ENV LD_LIBRARY_PATH=/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
+ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
+    COSYVOICE_PACKAGE_PATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS \
+    COSYVOICE_WHISPER_ASSETS_DIR=/opt/chat2m-whisper-assets \
+    PIPER_ESPEAK_DATA=/opt/piper/espeak-ng-data \
+    LD_LIBRARY_PATH=/opt/piper:/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
     PATH=/usr/src/tensorrt/bin:$PATH
 
 ENTRYPOINT ["/entrypoint.sh"]

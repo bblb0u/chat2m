@@ -22,6 +22,7 @@ from app.agent import (
     GATEWAY_URL,
     INPUT_CHANNELS,
     INPUT_DEVICE,
+    KWS_MODEL_DIR,
     MAX_SESSION_TURNS,
     POST_RESPONSE_DRAIN_SECONDS,
     SAMPLE_RATE,
@@ -31,16 +32,20 @@ from app.agent import (
     DisplayClient,
     choose_llm_route,
     create_asr,
+    create_kws,
     create_tts,
     drain_audio,
+    env_float,
     handle_conversation_turn,
     listen_command,
     log,
     preload_tts_cache,
+    read_mono,
     select_input_device,
     speak_pausing_input,
     start_llm_route_cache,
     warmup_tts,
+    wake_words_display,
     write_beep,
 )
 from app.respeaker import direction_answer, open_respeaker
@@ -49,6 +54,8 @@ from app.respeaker import direction_answer, open_respeaker
 SPEECH_HOST = os.getenv("SPEECH_HOST", "0.0.0.0")
 SPEECH_PORT = int(os.getenv("SPEECH_PORT", "8090"))
 STATUS_URL = os.getenv("STATUS_URL", "http://chat2m-status:8091/state")
+SPEECH_WAIT_LOG_SECONDS = env_float("SPEECH_WAIT_LOG_SECONDS")
+SPEECH_WAIT_POLL_SECONDS = env_float("SPEECH_WAIT_POLL_SECONDS")
 
 
 class StatusClient(DisplayClient):
@@ -151,6 +158,60 @@ def run_session_thread(recognizer, voice, tts_config, display: StatusClient, bee
         WakeHandler.busy_lock.release()
 
 
+def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: StatusClient) -> str:
+    stream = kws.create_stream()
+    matched = ""
+    last_error_log = 0.0
+    log(f"wake listener active: {wake_words_display()}")
+
+    while not matched:
+        try:
+            with sd.InputStream(
+                channels=INPUT_CHANNELS,
+                dtype="float32",
+                samplerate=SAMPLE_RATE,
+                device=input_device,
+                blocksize=chunk,
+            ) as audio:
+                while not matched:
+                    samples = read_mono(audio, chunk)
+                    stream.accept_waveform(SAMPLE_RATE, samples)
+                    while kws.is_ready(stream):
+                        kws.decode_stream(stream)
+                        result = kws.get_result(stream)
+                        if not result:
+                            continue
+                        matched = result
+                        log(f"wake keyword matched: {matched}")
+                        break
+        except Exception as exc:
+            now = time.monotonic()
+            if now - last_error_log >= SPEECH_WAIT_LOG_SECONDS:
+                log(f"wake input stream unavailable; retrying: {exc}")
+                last_error_log = now
+            display.set_state("error", "audio input unavailable")
+            time.sleep(SPEECH_WAIT_POLL_SECONDS)
+            stream = kws.create_stream()
+
+    return matched
+
+
+def run_embedded_wake_loop(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
+    input_device = select_input_device(INPUT_DEVICE)
+    log(f"input device: {input_device if input_device is not None else 'default'}")
+    log(f"loading wake-word model: {KWS_MODEL_DIR}")
+    kws = create_kws()
+    chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
+    display.set_state("idle")
+
+    while True:
+        listen_for_wake(kws, input_device, chunk, display)
+        if not WakeHandler.busy_lock.acquire(blocking=False):
+            log("wake ignored because a session is already running")
+            continue
+        run_session_thread(recognizer, voice, tts_config, display, beep_path, audio_source)
+
+
 def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputStream:
     deadline = time.monotonic() + 5.0
     last_error: Exception | None = None
@@ -243,8 +304,9 @@ def main() -> None:
 
     display.set_state("idle")
     server = ThreadingHTTPServer((SPEECH_HOST, SPEECH_PORT), WakeHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"speech service listening on {SPEECH_HOST}:{SPEECH_PORT}")
-    server.serve_forever()
+    run_embedded_wake_loop(recognizer, voice, tts_config, display, beep_path, audio_source)
 
 
 if __name__ == "__main__":

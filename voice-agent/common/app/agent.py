@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import io
 import os
 import re
 import threading
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Protocol
 
 from app.runtime import DisplayClient, env_bool, env_float, env_int, env_value, log
+from app.cosyvoice_runtime import install_cosyvoice_runtime_adapters
 
 import httpx
 import numpy as np
@@ -89,6 +91,18 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
+ONLINE_ASR_BASE_URL = os.getenv("ONLINE_ASR_BASE_URL", "").strip().rstrip("/")
+ONLINE_ASR_TRANSCRIPTIONS_PATH = os.getenv("ONLINE_ASR_TRANSCRIPTIONS_PATH", "/audio/transcriptions").strip() or "/audio/transcriptions"
+if not ONLINE_ASR_TRANSCRIPTIONS_PATH.startswith("/"):
+    ONLINE_ASR_TRANSCRIPTIONS_PATH = "/" + ONLINE_ASR_TRANSCRIPTIONS_PATH
+ONLINE_ASR_API_KEY = (os.getenv("ONLINE_ASR_API_KEY") or os.getenv("LLM_API_KEY", "")).strip()
+ONLINE_ASR_LANGUAGE = os.getenv("ONLINE_ASR_LANGUAGE", "zh").strip()
+ONLINE_ASR_PROMPT = os.getenv("ONLINE_ASR_PROMPT", "").strip()
+ONLINE_ASR_RESPONSE_FORMAT = os.getenv("ONLINE_ASR_RESPONSE_FORMAT", "json").strip() or "json"
+ONLINE_ASR_TIMEOUT_SECONDS = env_float("ONLINE_ASR_TIMEOUT_SECONDS")
+ONLINE_ASR_MIN_AUDIO_SECONDS = env_float("ONLINE_ASR_MIN_AUDIO_SECONDS")
+ONLINE_ASR_SILENCE_SECONDS = env_float("ONLINE_ASR_SILENCE_SECONDS")
+ONLINE_ASR_RMS_THRESHOLD = env_float("ONLINE_ASR_RMS_THRESHOLD")
 SHERPA_TTS_THREADS = env_int("SHERPA_TTS_THREADS")
 SHERPA_TTS_PROVIDER = os.getenv("SHERPA_TTS_PROVIDER", "cpu").strip().lower() or "cpu"
 SHERPA_TTS_SPEED = env_float("SHERPA_TTS_SPEED")
@@ -128,6 +142,13 @@ TTS_WARMUP_TEXTS = tuple(
 TTS_MODEL_DIR = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL
 VOICE_ASR_DEVICE = os.getenv("VOICE_ASR_DEVICE", "auto").strip().lower()
 VOICE_TTS_DEVICE = os.getenv("VOICE_TTS_DEVICE", "cuda").strip().lower()
+PIPER_MODEL = TTS_MODEL_DIR / "model.onnx"
+PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
+PIPER_ESPEAK_DATA = Path(os.getenv("PIPER_ESPEAK_DATA", "/opt/piper/espeak-ng-data"))
+PIPER_SPEAKER = env_int("PIPER_SPEAKER")
+PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
+PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
+PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
 F5_TTS_CKPT_FILE = Path(os.getenv("F5_TTS_CKPT_FILE", str(TTS_MODEL_DIR / "model_1250000.safetensors")))
 F5_TTS_VOCODER_DIR = Path(os.getenv("F5_TTS_VOCODER_DIR", str(MODELS_DIR / "f5-tts" / "vocos-mel-24khz")))
 F5_TTS_REF_AUDIO_RAW = os.getenv("F5_TTS_REF_AUDIO", "").strip()
@@ -143,6 +164,30 @@ F5_TTS_USE_EMA = env_bool("F5_TTS_USE_EMA")
 F5_TTS_ODE_METHOD = os.getenv("F5_TTS_ODE_METHOD", "euler").strip() or "euler"
 F5_TTS_SEED_RAW = os.getenv("F5_TTS_SEED", "").strip()
 F5_TTS_SEED = int(F5_TTS_SEED_RAW) if F5_TTS_SEED_RAW else None
+COSYVOICE_CODE_DIR = Path(os.getenv("COSYVOICE_CODE_DIR", "/opt/CosyVoice"))
+COSYVOICE_PACKAGE_PATH = os.getenv(
+    "COSYVOICE_PACKAGE_PATH",
+    f"{COSYVOICE_CODE_DIR}:{COSYVOICE_CODE_DIR / 'third_party' / 'Matcha-TTS'}",
+).strip()
+COSYVOICE_WHISPER_ASSETS_DIR = Path(os.getenv("COSYVOICE_WHISPER_ASSETS_DIR", "/opt/chat2m-whisper-assets"))
+COSYVOICE_SPK_ID = os.getenv("COSYVOICE_SPK_ID", "中文女").strip() or "中文女"
+COSYVOICE_INSTRUCT_TEXT = os.getenv("COSYVOICE_INSTRUCT_TEXT", "用自然、清晰、亲切的语气说话。").strip()
+COSYVOICE_SPEED = env_float("COSYVOICE_SPEED")
+COSYVOICE_TEXT_FRONTEND = env_bool("COSYVOICE_TEXT_FRONTEND")
+COSYVOICE_LOAD_JIT = env_bool("COSYVOICE_LOAD_JIT")
+COSYVOICE_LOAD_TRT = env_bool("COSYVOICE_LOAD_TRT")
+COSYVOICE_FP16 = env_bool("COSYVOICE_FP16")
+ONLINE_TTS_BASE_URL = os.getenv("ONLINE_TTS_BASE_URL", "").strip().rstrip("/")
+ONLINE_TTS_SPEECH_PATH = os.getenv("ONLINE_TTS_SPEECH_PATH", "/audio/speech").strip() or "/audio/speech"
+if not ONLINE_TTS_SPEECH_PATH.startswith("/"):
+    ONLINE_TTS_SPEECH_PATH = "/" + ONLINE_TTS_SPEECH_PATH
+ONLINE_TTS_API_KEY = (os.getenv("ONLINE_TTS_API_KEY") or os.getenv("LLM_API_KEY", "")).strip()
+ONLINE_TTS_VOICE = os.getenv("ONLINE_TTS_VOICE", "alloy").strip() or "alloy"
+ONLINE_TTS_INSTRUCTIONS = os.getenv("ONLINE_TTS_INSTRUCTIONS", "").strip()
+ONLINE_TTS_RESPONSE_FORMAT = os.getenv("ONLINE_TTS_RESPONSE_FORMAT", "pcm").strip() or "pcm"
+ONLINE_TTS_SPEED = env_float("ONLINE_TTS_SPEED")
+ONLINE_TTS_SAMPLE_RATE = env_int("ONLINE_TTS_SAMPLE_RATE")
+ONLINE_TTS_TIMEOUT_SECONDS = env_float("ONLINE_TTS_TIMEOUT_SECONDS")
 DISPLAY_TEXT_MAX_CHARS = env_int("DISPLAY_TEXT_MAX_CHARS")
 DISPLAY_SERIAL_RETRY_SECONDS = env_float("DISPLAY_SERIAL_RETRY_SECONDS")
 WAKE_RESPONSE = env_value("WAKE_RESPONSE")
@@ -390,6 +435,110 @@ class SenseVoiceStreamingRecognizer:
         return bool(stream.get("endpoint", False))
 
 
+class OnlineBatchRecognizer:
+    def __init__(self) -> None:
+        self.sample_rate = SAMPLE_RATE
+
+    def create_stream(self) -> dict[str, Any]:
+        return {
+            "chunks": [],
+            "seconds": 0.0,
+            "active_seconds": 0.0,
+            "speech_started": False,
+            "endpoint": False,
+            "finalized": False,
+            "text": "",
+        }
+
+    def accept_waveform(self, stream: dict[str, Any], sample_rate: int, samples: np.ndarray) -> None:
+        if sample_rate != self.sample_rate:
+            raise RuntimeError(f"online ASR input must be {self.sample_rate} Hz")
+        audio = np.asarray(samples, dtype=np.float32).reshape(-1)
+        if not audio.size:
+            return
+        stream["chunks"].append(audio.copy())
+        seconds = len(audio) / max(1, sample_rate)
+        stream["seconds"] = float(stream["seconds"]) + seconds
+        rms = audio_rms(audio)
+        if rms >= ONLINE_ASR_RMS_THRESHOLD:
+            stream["speech_started"] = True
+            stream["active_seconds"] = float(stream["seconds"])
+        elif stream["speech_started"]:
+            trailing = float(stream["seconds"]) - float(stream["active_seconds"])
+            if float(stream["seconds"]) >= ONLINE_ASR_MIN_AUDIO_SECONDS and trailing >= ONLINE_ASR_SILENCE_SECONDS:
+                stream["endpoint"] = True
+
+    def input_finished(self, stream: dict[str, Any]) -> None:
+        if stream.get("finalized"):
+            return
+        stream["finalized"] = True
+        chunks = stream.get("chunks") or []
+        if not chunks:
+            stream["text"] = ""
+            return
+        audio = np.concatenate(chunks).astype(np.float32, copy=False)
+        stream["text"] = transcribe_online_audio(audio, self.sample_rate)
+
+    def decode_ready(self, stream: dict[str, Any]) -> str:
+        return str(stream.get("text") or "").strip()
+
+    def is_endpoint(self, stream: dict[str, Any]) -> bool:
+        return bool(stream.get("endpoint", False))
+
+
+def online_audio_headers(api_key: str) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def online_asr_url() -> str:
+    if not ONLINE_ASR_BASE_URL:
+        raise RuntimeError("ONLINE_ASR_BASE_URL must be set when VOICE_ASR_ENGINE=online")
+    return f"{ONLINE_ASR_BASE_URL}{ONLINE_ASR_TRANSCRIPTIONS_PATH}"
+
+
+def online_tts_url() -> str:
+    if not ONLINE_TTS_BASE_URL:
+        raise RuntimeError("ONLINE_TTS_BASE_URL must be set when VOICE_TTS_ENGINE=online")
+    return f"{ONLINE_TTS_BASE_URL}{ONLINE_TTS_SPEECH_PATH}"
+
+
+def float_audio_to_wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
+    clipped = np.clip(np.asarray(samples, dtype=np.float32).reshape(-1), -1.0, 1.0)
+    pcm = (clipped * 32767.0).astype(np.int16).tobytes()
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return buffer.getvalue()
+
+
+def transcribe_online_audio(samples: np.ndarray, sample_rate: int) -> str:
+    wav_bytes = float_audio_to_wav_bytes(samples, sample_rate)
+    data = {
+        "model": VOICE_ASR_MODEL,
+        "response_format": ONLINE_ASR_RESPONSE_FORMAT,
+    }
+    if ONLINE_ASR_LANGUAGE:
+        data["language"] = ONLINE_ASR_LANGUAGE
+    if ONLINE_ASR_PROMPT:
+        data["prompt"] = ONLINE_ASR_PROMPT
+    files = {"file": ("speech.wav", wav_bytes, "audio/wav")}
+    timeout = httpx.Timeout(connect=5.0, read=ONLINE_ASR_TIMEOUT_SECONDS, write=15.0, pool=5.0)
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(online_asr_url(), headers=online_audio_headers(ONLINE_ASR_API_KEY), data=data, files=files)
+        response.raise_for_status()
+    if ONLINE_ASR_RESPONSE_FORMAT == "json":
+        payload = response.json()
+        if isinstance(payload, dict):
+            return str(payload.get("text") or "").strip()
+    return response.text.strip()
+
+
 def create_sherpa_asr() -> StreamingRecognizer:
     import sherpa_onnx
 
@@ -586,6 +735,13 @@ def create_asr() -> StreamingRecognizer:
         return create_sherpa_asr()
     if VOICE_ASR_ENGINE == "sensevoice":
         return create_sensevoice_asr()
+    if VOICE_ASR_ENGINE == "online":
+        log(
+            "Online ASR config: "
+            f"url={online_asr_url()} model={VOICE_ASR_MODEL} language={ONLINE_ASR_LANGUAGE} "
+            f"format={ONLINE_ASR_RESPONSE_FORMAT}"
+        )
+        return OnlineBatchRecognizer()
     raise RuntimeError(f"VOICE_ASR_ENGINE '{VOICE_ASR_ENGINE}' is not supported")
 
 
@@ -628,6 +784,77 @@ class F5TextToSpeech:
 
     def synthesize_pcm(self, text: str) -> Iterable[bytes]:
         yield tensor_audio_bytes(self.runtime.generate(text))
+
+
+class PiperTTS:
+    def __init__(self, sample_rate: int) -> None:
+        self.config = SimpleNamespace(sample_rate=sample_rate)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        command = [
+            "piper",
+            "--model",
+            str(PIPER_MODEL),
+            "--config",
+            str(PIPER_CONFIG),
+            "--output_raw",
+            "--speaker",
+            str(PIPER_SPEAKER),
+            "--length_scale",
+            str(PIPER_LENGTH_SCALE),
+            "--noise_scale",
+            str(PIPER_NOISE_SCALE),
+            "--noise_w",
+            str(PIPER_NOISE_W_SCALE),
+            "--espeak_data",
+            str(PIPER_ESPEAK_DATA),
+            "--quiet",
+        ]
+        with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as process:
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write(text.encode("utf-8"))
+            process.stdin.close()
+            while True:
+                chunk = process.stdout.read(4096)
+                if not chunk:
+                    break
+                yield chunk
+            return_code = process.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
+        if return_code != 0:
+            raise RuntimeError(f"piper exited with status {return_code}")
+
+
+class OnlineTextToSpeech:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(sample_rate=ONLINE_TTS_SAMPLE_RATE)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        audio = synthesize_online_audio(text)
+        yield decode_online_tts_audio(audio, ONLINE_TTS_RESPONSE_FORMAT, ONLINE_TTS_SAMPLE_RATE)
+
+
+class CosyVoiceTTS:
+    def __init__(self, model: Any) -> None:
+        self.model = model
+        sample_rate = int(getattr(model, "sample_rate", 22050) or 22050)
+        self.config = SimpleNamespace(sample_rate=sample_rate)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        kwargs = {
+            "stream": False,
+            "speed": COSYVOICE_SPEED,
+            "text_frontend": COSYVOICE_TEXT_FRONTEND,
+        }
+        if VOICE_TTS_MODEL.endswith("-Instruct"):
+            chunks = self.model.inference_instruct(text, COSYVOICE_SPK_ID, COSYVOICE_INSTRUCT_TEXT, **kwargs)
+        elif VOICE_TTS_MODEL.endswith("-SFT"):
+            chunks = self.model.inference_sft(text, COSYVOICE_SPK_ID, **kwargs)
+        else:
+            raise RuntimeError("use CosyVoice-300M-SFT or CosyVoice-300M-Instruct")
+        for chunk in chunks:
+            speech = chunk.get("tts_speech") if isinstance(chunk, dict) else chunk
+            yield tensor_audio_bytes(speech)
 
 
 class CachedTextToSpeech:
@@ -781,6 +1008,75 @@ def create_melotts_tts() -> TextToSpeech:
     return SherpaTTSWithSpeaker(tts, MELOTTS_SPEAKER, MELOTTS_SPEED)
 
 
+def create_cosyvoice_tts() -> TextToSpeech:
+    import inspect
+    import torch
+
+    install_cosyvoice_runtime_adapters(
+        COSYVOICE_PACKAGE_PATH,
+        COSYVOICE_WHISPER_ASSETS_DIR,
+        COSYVOICE_TEXT_FRONTEND,
+    )
+    from cosyvoice.cli.cosyvoice import CosyVoice
+
+    for name in ("cosyvoice.yaml", "flow.pt", "hift.pt", "llm.pt", "campplus.onnx", "speech_tokenizer_v1.onnx"):
+        require_file(TTS_MODEL_DIR / name)
+    if VOICE_TTS_MODEL.endswith(("-SFT", "-Instruct")):
+        require_file(TTS_MODEL_DIR / "spk2info.pt")
+    if VOICE_TTS_DEVICE not in {"auto", "cuda", "gpu"} and not VOICE_TTS_DEVICE.startswith("cuda:"):
+        raise RuntimeError("CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto.")
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CosyVoice requires torch CUDA, "
+            f"but CUDA is not available: device={VOICE_TTS_DEVICE} "
+            f"torch={torch.__version__} cuda={torch.version.cuda}"
+        )
+    if VOICE_TTS_DEVICE.startswith("cuda:"):
+        device_index = VOICE_TTS_DEVICE.split(":", 1)[1]
+        if not device_index.isdigit():
+            raise RuntimeError("VOICE_TTS_DEVICE must be auto, cuda, gpu, or cuda:<index> for CosyVoice")
+        if int(device_index) >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"VOICE_TTS_DEVICE={VOICE_TTS_DEVICE} is not available; "
+                f"torch sees {torch.cuda.device_count()} CUDA device(s)"
+            )
+        torch.cuda.set_device(int(device_index))
+    device = "cuda" if VOICE_TTS_DEVICE in {"auto", "gpu"} else VOICE_TTS_DEVICE
+    log(
+        "CosyVoice TTS config: "
+        f"model={TTS_MODEL_DIR} device={device} speaker={COSYVOICE_SPK_ID} "
+        f"jit={COSYVOICE_LOAD_JIT} trt={COSYVOICE_LOAD_TRT} fp16={COSYVOICE_FP16}"
+    )
+    init_kwargs: dict[str, Any] = {}
+    signature = inspect.signature(CosyVoice)
+    if "load_jit" in signature.parameters:
+        init_kwargs["load_jit"] = COSYVOICE_LOAD_JIT
+    if "load_trt" in signature.parameters:
+        init_kwargs["load_trt"] = COSYVOICE_LOAD_TRT
+    if "fp16" in signature.parameters:
+        init_kwargs["fp16"] = COSYVOICE_FP16
+    if "device" in signature.parameters:
+        init_kwargs["device"] = device
+    try:
+        model = CosyVoice(str(TTS_MODEL_DIR), **init_kwargs)
+    except AssertionError as exc:
+        if COSYVOICE_LOAD_TRT:
+            plan = TTS_MODEL_DIR / f"flow.decoder.estimator.{'fp16' if COSYVOICE_FP16 else 'fp32'}.mygpu.plan"
+            raise RuntimeError(
+                "CosyVoice TensorRT engine failed to load. "
+                f"Plan file: {plan}. "
+                "Regenerate the plan inside this image/runtime, or set COSYVOICE_LOAD_TRT=0."
+            ) from exc
+        raise
+    available_spks = list(getattr(getattr(model, "frontend", None), "spk2info", {}).keys())
+    if available_spks and COSYVOICE_SPK_ID not in available_spks:
+        raise RuntimeError(
+            f"CosyVoice speaker '{COSYVOICE_SPK_ID}' is not available. "
+            f"Available speakers: {', '.join(available_spks)}"
+        )
+    return CosyVoiceTTS(model)
+
+
 class SherpaTTSWithSpeaker(SherpaTTS):
     def __init__(self, tts: Any, speaker: int, speed: float) -> None:
         super().__init__(tts)
@@ -817,12 +1113,18 @@ def create_f5_tts() -> TextToSpeech:
 
 
 def create_tts() -> tuple[TextToSpeech, None]:
+    if VOICE_TTS_ENGINE == "piper":
+        return wrap_tts(create_piper_tts()), None
     if VOICE_TTS_ENGINE == "melotts":
         return wrap_tts(create_melotts_tts()), None
     if VOICE_TTS_ENGINE == "sherpa":
         return wrap_tts(create_sherpa_tts()), None
     if VOICE_TTS_ENGINE == "f5-tts":
         return wrap_tts(create_f5_tts()), None
+    if VOICE_TTS_ENGINE == "cosyvoice":
+        return wrap_tts(create_cosyvoice_tts()), None
+    if VOICE_TTS_ENGINE == "online":
+        return wrap_tts(create_online_tts()), None
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")
 
 
@@ -852,6 +1154,74 @@ def warmup_tts(voice: TextToSpeech) -> None:
             f"text_chars={len(text)} chunks={chunks} bytes={bytes_total} "
             f"elapsed={time.monotonic() - started:.2f}s"
         )
+
+
+def create_piper_tts() -> TextToSpeech:
+    require_file(PIPER_MODEL)
+    require_file(PIPER_CONFIG)
+    if not PIPER_ESPEAK_DATA.is_dir():
+        raise FileNotFoundError(f"missing required directory: {PIPER_ESPEAK_DATA}")
+    with PIPER_CONFIG.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file) or {}
+    audio = config.get("audio") if isinstance(config, dict) else None
+    sample_rate = int((audio or {}).get("sample_rate") or 22050)
+    log(f"Piper TTS config: model={PIPER_MODEL} sample_rate={sample_rate} speaker={PIPER_SPEAKER}")
+    return PiperTTS(sample_rate)
+
+
+def synthesize_online_audio(text: str) -> bytes:
+    payload: dict[str, Any] = {
+        "model": VOICE_TTS_MODEL,
+        "input": text,
+        "voice": ONLINE_TTS_VOICE,
+        "response_format": ONLINE_TTS_RESPONSE_FORMAT,
+        "speed": ONLINE_TTS_SPEED,
+    }
+    if ONLINE_TTS_INSTRUCTIONS:
+        payload["instructions"] = ONLINE_TTS_INSTRUCTIONS
+    timeout = httpx.Timeout(connect=5.0, read=ONLINE_TTS_TIMEOUT_SECONDS, write=15.0, pool=5.0)
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(
+            online_tts_url(),
+            headers={"Content-Type": "application/json", **online_audio_headers(ONLINE_TTS_API_KEY)},
+            json=payload,
+        )
+        response.raise_for_status()
+    return response.content
+
+
+def decode_online_tts_audio(audio: bytes, response_format: str, sample_rate: int) -> bytes:
+    if response_format == "pcm":
+        return audio
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        "-f",
+        "s16le",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "pipe:1",
+    ]
+    result = subprocess.run(command, input=audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"online TTS audio decode failed: {detail}")
+    return result.stdout
+
+
+def create_online_tts() -> TextToSpeech:
+    log(
+        "Online TTS config: "
+        f"url={online_tts_url()} model={VOICE_TTS_MODEL} voice={ONLINE_TTS_VOICE} "
+        f"format={ONLINE_TTS_RESPONSE_FORMAT} sample_rate={ONLINE_TTS_SAMPLE_RATE}"
+    )
+    return OnlineTextToSpeech()
 
 
 def tensor_audio_bytes(audio: Any) -> bytes:

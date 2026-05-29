@@ -4,8 +4,7 @@
 
 - `ollama` 容器运行本地小模型；也可以在 `runtime.env` 切到任意 OpenAI-compatible 在线接口。
 - `chat2m-gateway` 容器提供 FastAPI 对话接口。
-- `chat2m-wake` 容器负责麦克风唤醒词监听。
-- `chat2m-speech` 容器负责流式 ASR、连续对话和本地流式 TTS。
+- `chat2m-speech` 容器负责唤醒词监听、ASR、连续对话和 TTS 播放。
 - `chat2m-status` 容器负责把状态转发到 ESP32 显示屏。
 - `config/` 放默认配置模板；运行时配置会初始化到 `data/config/`。
 
@@ -41,7 +40,7 @@ docker compose down
 运行时请改 `data/config/runtime.env`，改完重启相关容器：
 
 ```bash
-docker compose up -d --force-recreate ollama chat2m-gateway chat2m-speech chat2m-wake
+docker compose up -d --force-recreate ollama chat2m-gateway chat2m-speech
 ```
 
 本地 Ollama：
@@ -153,12 +152,12 @@ OLLAMA_MODEL=qwen3:4b-instruct
 
 当前语音链路：
 
-- 唤醒监听：`chat2m-wake` 默认监听“嗨小江 / 嘿小江 / 小江”，用于提升实际唤醒稳定性。
+- 唤醒监听：`chat2m-speech` 内部监听 `runtime.env` 里的唤醒词，命中后直接进入本轮会话。
 - ASR 输入：唤醒后使用 ReSpeaker Mic Array v3.0 处理后的采集音频和 SenseVoice 流式 ASR，把识别文本 POST 到 `/chat`。
 - 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
-- TTS 输出：默认使用 MeloTTS ONNX CPU 链路；重模型可切换 F5-TTS，合成 PCM 后直接通过 ALSA 播放。
+- TTS 输出：默认使用 MeloTTS ONNX CPU 链路；也可切换 Piper、Sherpa、F5-TTS、CosyVoice 或在线 TTS，合成 PCM 后直接通过 ALSA 播放。
 - 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒
@@ -167,10 +166,10 @@ OLLAMA_MODEL=qwen3:4b-instruct
 
 ```bash
 docker compose up -d
-docker compose logs -f chat2m-wake chat2m-speech chat2m-status
+docker compose logs -f chat2m-speech chat2m-status
 ```
 
-默认唤醒词是“嗨小江 / 嘿小江 / 小江”。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 TTS 引擎，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
+默认唤醒词配置在 `data/config/runtime.env` 的 `WAKE_WORDS`。如果要更换唤醒词、音频设备、显示屏串口、Ollama 模型或 ASR/TTS 引擎，改 `data/config/runtime.env`；完整配置说明见 `.env.example`。ASR 热词和 `profile.yaml` 一样是独立外挂配置，运行时修改 `data/config/hotwords.yaml`，重启 `chat2m-speech` 后生效。
 
 镜像会预装对应服务需要的运行时依赖。启动后主要检查和下载的是 `data/models/` 下可迁移复用的唤醒、ASR、TTS 模型；换机器时保留 `data/` 可以复用这些内容。
 
@@ -217,19 +216,38 @@ VOICE_TTS_ENGINE=melotts
 VOICE_TTS_MODEL=vits-melo-tts-zh_en
 ```
 
+在线 ASR/TTS 使用 OpenAI-compatible 音频接口。`ONLINE_ASR_API_KEY` 或 `ONLINE_TTS_API_KEY` 留空时会复用 `LLM_API_KEY`：
+
+```env
+VOICE_ASR_ENGINE=online
+VOICE_ASR_MODEL=gpt-4o-mini-transcribe
+ONLINE_ASR_BASE_URL=https://api.openai.com/v1
+VOICE_TTS_ENGINE=online
+VOICE_TTS_MODEL=gpt-4o-mini-tts
+ONLINE_TTS_BASE_URL=https://api.openai.com/v1
+ONLINE_TTS_RESPONSE_FORMAT=pcm
+ONLINE_TTS_SAMPLE_RATE=24000
+```
+
 目前内置可选项：
 
 ```env
 VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_ASR_ENGINE=online     # VOICE_ASR_MODEL=gpt-4o-mini-transcribe
+VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
 VOICE_TTS_ENGINE=melotts    # VOICE_TTS_MODEL=vits-melo-tts-zh_en
 VOICE_TTS_ENGINE=sherpa     # VOICE_TTS_MODEL=matcha-icefall-zh-en
 VOICE_TTS_ENGINE=f5-tts     # VOICE_TTS_MODEL=F5TTS_v1_Base
+VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT
+VOICE_TTS_ENGINE=online     # VOICE_TTS_MODEL=gpt-4o-mini-tts
 VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
-VOICE_TTS_DEVICE=cpu        # MeloTTS/Sherpa 使用 CPU；F5-TTS 可用 auto / cpu / cuda
+VOICE_TTS_DEVICE=cpu        # Piper/MeloTTS/Sherpa 使用 CPU；F5-TTS 可用 auto/cpu/cuda；CosyVoice 需要 cuda/auto
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。MeloTTS、Sherpa TTS、F5-TTS 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。Piper、MeloTTS、Sherpa TTS、F5-TTS、CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。镜像构建时公共 apt/pip 依赖和各模型专属依赖分在 `voice-agent/deps/` 脚本里，方便后续裁剪构建特定模型组合。
+
+`COSYVOICE_LOAD_TRT` 默认关闭。TensorRT `plan` 文件和当前 Jetson/TensorRT/plugin 环境强绑定；如果显式开启 TRT，必须在当前镜像运行环境里生成对应 plan，否则会直接报错，不会静默降级。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

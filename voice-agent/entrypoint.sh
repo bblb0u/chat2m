@@ -8,8 +8,7 @@ RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-$CONFIG_DIR/runtime.env}"
 
 default_voice_model_set() {
   case "$VOICE_ROLE" in
-    chat2m-wake) echo "kws" ;;
-    chat2m-speech) echo "speech" ;;
+    chat2m-speech) echo "kws,speech" ;;
     *) echo "kws,speech" ;;
   esac
 }
@@ -87,8 +86,11 @@ resolve_asr_model() {
           ;;
       esac
       ;;
+    online)
+      VOICE_ASR_MODEL="${VOICE_ASR_MODEL:-gpt-4o-mini-transcribe}"
+      ;;
     *)
-      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sherpa, sensevoice"
+      known_value_error "VOICE_ASR_ENGINE" "$VOICE_ASR_ENGINE" "sherpa, sensevoice, online"
       ;;
   esac
 }
@@ -96,6 +98,18 @@ resolve_asr_model() {
 resolve_tts_model() {
   VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-melotts}")"
   case "$VOICE_TTS_ENGINE" in
+    piper)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
+      case "$VOICE_TTS_MODEL" in
+        zh_CN-huayan-medium)
+          PIPER_MODEL_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx"
+          PIPER_CONFIG_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
+          ;;
+        *)
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "zh_CN-huayan-medium"
+          ;;
+      esac
+      ;;
     melotts)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-vits-melo-tts-zh_en}"
       case "$VOICE_TTS_MODEL" in
@@ -138,8 +152,29 @@ resolve_tts_model() {
           ;;
       esac
       ;;
+    cosyvoice)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-CosyVoice-300M-SFT}"
+      case "$VOICE_TTS_MODEL" in
+        CosyVoice-300M-SFT)
+          COSYVOICE_HF_REPO_ID="FunAudioLLM/CosyVoice-300M-SFT"
+          COSYVOICE_HF_REVISION="main"
+          COSYVOICE_REQUIRED_FILES="cosyvoice.yaml,flow.pt,hift.pt,llm.pt,spk2info.pt,campplus.onnx,speech_tokenizer_v1.onnx"
+          ;;
+        CosyVoice-300M-Instruct)
+          COSYVOICE_HF_REPO_ID="FunAudioLLM/CosyVoice-300M-Instruct"
+          COSYVOICE_HF_REVISION="main"
+          COSYVOICE_REQUIRED_FILES="cosyvoice.yaml,flow.pt,hift.pt,llm.pt,spk2info.pt,campplus.onnx,speech_tokenizer_v1.onnx"
+          ;;
+        *)
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "CosyVoice-300M-SFT, CosyVoice-300M-Instruct"
+          ;;
+      esac
+      ;;
+    online)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-gpt-4o-mini-tts}"
+      ;;
     *)
-      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "melotts, sherpa, f5-tts"
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "piper, melotts, sherpa, f5-tts, cosyvoice, online"
       ;;
   esac
 }
@@ -319,6 +354,22 @@ melotts_model_ok() {
     && melotts_runtime_ok
 }
 
+piper_runtime_ok() {
+  command -v piper >/dev/null 2>&1 \
+    && [ -d "${PIPER_ESPEAK_DATA:-/opt/piper/espeak-ng-data}" ]
+}
+
+piper_model_ok() {
+  required_files_ok \
+    "$TTS_MODEL_DIR/model.onnx" \
+    "$TTS_MODEL_DIR/model.onnx.json" \
+    && piper_runtime_ok
+}
+
+cosyvoice_model_ok() {
+  required_relative_files_ok "$TTS_MODEL_DIR" "$COSYVOICE_REQUIRED_FILES"
+}
+
 dir_has_files() {
   dir="$1"
   [ -d "$dir" ] || return 1
@@ -439,6 +490,13 @@ ensure_melotts_runtime() {
   missing_image_dependency "MeloTTS ONNX runtime"
 }
 
+ensure_piper_runtime() {
+  if piper_runtime_ok; then
+    return
+  fi
+  missing_image_dependency "Piper runtime"
+}
+
 sensevoice_runtime_ok() {
   python_module_ok sense_voice_streaming_asr \
     && python_module_ok onnxruntime \
@@ -451,6 +509,45 @@ ensure_sensevoice_runtime() {
     return
   fi
   missing_image_dependency "SenseVoice streaming ASR runtime"
+}
+
+cosyvoice_runtime_ok() {
+  python_module_ok torch \
+    && python_module_ok onnxruntime \
+    && python_module_ok hyperpyyaml \
+    && python_module_ok transformers \
+    && python_module_ok librosa \
+    && python_module_ok scipy \
+    && python_module_ok cosyvoice.cli.cosyvoice \
+    && python_module_ok matcha
+}
+
+ensure_cosyvoice_runtime() {
+  COSYVOICE_CODE_DIR="${COSYVOICE_CODE_DIR:-/opt/CosyVoice}"
+  export COSYVOICE_PACKAGE_PATH="${COSYVOICE_PACKAGE_PATH:-$COSYVOICE_CODE_DIR:$COSYVOICE_CODE_DIR/third_party/Matcha-TTS}"
+  export PYTHONPATH="$COSYVOICE_PACKAGE_PATH${PYTHONPATH:+:$PYTHONPATH}"
+  [ -d "$COSYVOICE_CODE_DIR/cosyvoice" ] || missing_image_dependency "CosyVoice code directory '$COSYVOICE_CODE_DIR/cosyvoice'"
+  [ -d "$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha" ] || missing_image_dependency "Matcha-TTS code directory '$COSYVOICE_CODE_DIR/third_party/Matcha-TTS/matcha'"
+  if ! cosyvoice_runtime_ok; then
+    missing_image_dependency "CosyVoice runtime"
+  fi
+  case "$(normalize_key "${VOICE_TTS_DEVICE:-auto}")" in
+    auto|cuda|gpu|cuda:*) verify_torch_cuda_runtime ;;
+    *)
+      echo "CosyVoice requires GPU. Set VOICE_TTS_DEVICE=cuda or auto." >&2
+      exit 1
+      ;;
+  esac
+}
+
+ensure_online_asr_runtime() {
+  require_python_module httpx
+  require_command ffmpeg
+}
+
+ensure_online_tts_runtime() {
+  require_python_module httpx
+  require_command ffmpeg
 }
 
 f5_tts_runtime_ok() {
@@ -487,11 +584,15 @@ ensure_selected_runtimes() {
     case "$VOICE_ASR_ENGINE" in
       sherpa) ensure_sherpa_asr_runtime ;;
       sensevoice) ensure_sensevoice_runtime ;;
+      online) ensure_online_asr_runtime ;;
     esac
     case "$VOICE_TTS_ENGINE" in
+      piper) ensure_piper_runtime ;;
       melotts) ensure_melotts_runtime ;;
       sherpa) ensure_sherpa_tts_runtime ;;
       f5-tts) ensure_f5_tts_runtime ;;
+      cosyvoice) ensure_cosyvoice_runtime ;;
+      online) ensure_online_tts_runtime ;;
     esac
   fi
 }
@@ -533,44 +634,67 @@ download_with_progress() {
   url="$2"
   label="$3"
   tmp="$output.download"
+  max_attempts="${MODEL_DOWNLOAD_RETRIES:-10}"
+  attempt=1
 
   mkdir -p "$(dirname "$output")"
   total="$(content_length "$url" || true)"
   echo "[models] downloading $label"
-  if [ -f "$tmp" ]; then
-    completed="$(wc -c < "$tmp" | tr -d ' ')"
-    echo "[models] resuming $label from $(awk -v done="$completed" 'BEGIN { printf("%.1f", done / 1048576) }') MB"
-  else
-    completed=0
-  fi
-  print_download_progress "$label" "$completed" "$total"
 
-  curl -fL --retry 10 --retry-connrefused --connect-timeout 20 --speed-limit 1024 --speed-time 120 --continue-at - --silent --show-error "$url" -o "$tmp" &
-  curl_pid="$!"
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if [ -f "$tmp" ]; then
+      completed="$(wc -c < "$tmp" | tr -d ' ')"
+      echo "[models] resuming $label from $(awk -v done="$completed" 'BEGIN { printf("%.1f", done / 1048576) }') MB"
+    else
+      completed=0
+    fi
+    print_download_progress "$label" "$completed" "$total"
 
-  (
-    while kill -0 "$curl_pid" 2>/dev/null; do
-      if [ -f "$tmp" ]; then
-        completed="$(wc -c < "$tmp" | tr -d ' ')"
-        print_download_progress "$label" "$completed" "$total"
-      fi
-      sleep 5
-    done
-  ) &
-  progress_pid="$!"
+    curl -fL --retry 10 --retry-connrefused --connect-timeout 20 --speed-limit 1024 --speed-time 120 --continue-at - --silent --show-error "$url" -o "$tmp" &
+    curl_pid="$!"
 
-  if ! wait "$curl_pid"; then
+    (
+      while kill -0 "$curl_pid" 2>/dev/null; do
+        if [ -f "$tmp" ]; then
+          completed="$(wc -c < "$tmp" | tr -d ' ')"
+          print_download_progress "$label" "$completed" "$total"
+        fi
+        sleep 5
+      done
+    ) &
+    progress_pid="$!"
+
+    if wait "$curl_pid"; then
+      curl_ok=1
+    else
+      curl_ok=0
+    fi
+
     kill "$progress_pid" 2>/dev/null || true
     wait "$progress_pid" 2>/dev/null || true
-    rm -f "$tmp"
-    return 1
-  fi
 
-  kill "$progress_pid" 2>/dev/null || true
-  wait "$progress_pid" 2>/dev/null || true
-  completed="$(wc -c < "$tmp" | tr -d ' ')"
-  print_download_progress "$label" "$completed" "$total"
-  mv "$tmp" "$output"
+    if [ "$curl_ok" -eq 1 ]; then
+      completed="$(wc -c < "$tmp" | tr -d ' ')"
+      print_download_progress "$label" "$completed" "$total"
+      if [ "${total:-0}" -gt 0 ] && [ "$completed" -lt "$total" ]; then
+        echo "[models] incomplete download for $label: $completed/$total bytes" >&2
+      else
+        mv "$tmp" "$output"
+        return 0
+      fi
+    fi
+
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      rm -f "$tmp"
+      return 1
+    fi
+    echo "[models] retrying $label download ($attempt/$max_attempts)"
+    attempt=$((attempt + 1))
+    sleep 5
+  done
+
+  rm -f "$tmp"
+  return 1
 }
 
 download_and_extract() {
@@ -729,6 +853,34 @@ ensure_melotts_model() {
   fi
 }
 
+ensure_piper_model() {
+  if piper_model_ok; then
+    echo "piper $VOICE_TTS_MODEL is ready"
+    return
+  fi
+
+  echo "piper $VOICE_TTS_MODEL is missing or invalid; re-downloading"
+  rm -rf "$TTS_MODEL_DIR"
+  download_with_progress "$TTS_MODEL_DIR/model.onnx" "$PIPER_MODEL_URL" "$VOICE_TTS_MODEL.onnx"
+  download_with_progress "$TTS_MODEL_DIR/model.onnx.json" "$PIPER_CONFIG_URL" "$VOICE_TTS_MODEL.onnx.json"
+
+  echo "[models] validating piper $VOICE_TTS_MODEL"
+  if ! piper_model_ok; then
+    echo "piper $VOICE_TTS_MODEL is still invalid after download" >&2
+    exit 1
+  fi
+}
+
+ensure_cosyvoice_model() {
+  ensure_hf_snapshot_model \
+    "$VOICE_TTS_MODEL" \
+    "$COSYVOICE_HF_REPO_ID" \
+    "$COSYVOICE_HF_REVISION" \
+    cosyvoice_model_ok \
+    "$TTS_MODEL_DIR" \
+    "$COSYVOICE_REQUIRED_FILES"
+}
+
 f5_tts_model_ok() {
   required_files_ok \
     "$TTS_MODEL_DIR/model_1250000.safetensors" \
@@ -811,11 +963,15 @@ if model_selected speech; then
   case "$VOICE_ASR_ENGINE" in
     sherpa) MODEL_SET="$MODEL_SET,asr" ;;
     sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
+    online) ;;
   esac
   case "$VOICE_TTS_ENGINE" in
+    piper) MODEL_SET="$MODEL_SET,piper" ;;
     melotts) MODEL_SET="$MODEL_SET,melotts" ;;
     sherpa) MODEL_SET="$MODEL_SET,sherpa-tts" ;;
     f5-tts) MODEL_SET="$MODEL_SET,f5-tts" ;;
+    cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
+    online) ;;
   esac
 fi
 : "${LOCK_WAIT_LOG_SECONDS:?LOCK_WAIT_LOG_SECONDS must be set in runtime.env}"
@@ -866,6 +1022,10 @@ if model_selected sherpa-tts; then
   ensure_sherpa_tts_model
 fi
 
+if model_selected piper; then
+  ensure_piper_model
+fi
+
 if model_selected melotts; then
   ensure_melotts_model
 fi
@@ -893,6 +1053,10 @@ fi
 
 if model_selected f5-tts; then
   ensure_f5_tts_model
+fi
+
+if model_selected cosyvoice; then
+  ensure_cosyvoice_model
 fi
 
 trap - EXIT

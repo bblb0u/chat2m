@@ -14,7 +14,7 @@ RUN apt-get update \
       python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-COPY voice-agent/requirements.txt .
+COPY voice-agent/status/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config /defaults/config
