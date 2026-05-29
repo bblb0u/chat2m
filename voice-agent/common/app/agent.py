@@ -90,6 +90,13 @@ ASR_NOISE_GATE_PERCENTILE = env_float("ASR_NOISE_GATE_PERCENTILE")
 ASR_NOISE_GATE_RATIO = env_float("ASR_NOISE_GATE_RATIO")
 ASR_NOISE_GATE_OFFSET = env_float("ASR_NOISE_GATE_OFFSET")
 ASR_PREROLL_SECONDS = env_float("ASR_PREROLL_SECONDS")
+PIPER_MODEL = MODELS_DIR / VOICE_TTS_ENGINE / VOICE_TTS_MODEL / "model.onnx"
+PIPER_CONFIG = Path(str(PIPER_MODEL) + ".json")
+PIPER_ESPEAK_DATA = Path(os.getenv("PIPER_ESPEAK_DATA", "/opt/piper/espeak-ng-data"))
+PIPER_SPEAKER = env_int("PIPER_SPEAKER")
+PIPER_LENGTH_SCALE = env_float("PIPER_LENGTH_SCALE")
+PIPER_NOISE_SCALE = env_float("PIPER_NOISE_SCALE")
+PIPER_NOISE_W_SCALE = env_float("PIPER_NOISE_W_SCALE")
 TTS_PLAYER_TIMEOUT_SECONDS = env_float("TTS_PLAYER_TIMEOUT_SECONDS")
 SPEECH_TTS_MAX_CHARS = env_int("SPEECH_TTS_MAX_CHARS")
 TTS_CACHE_ENABLED = env_bool("TTS_CACHE_ENABLED")
@@ -560,6 +567,45 @@ class CosyVoiceTTS:
             yield tensor_audio_bytes(speech)
 
 
+class PiperTTS:
+    def __init__(self, sample_rate: int) -> None:
+        self.config = SimpleNamespace(sample_rate=sample_rate)
+
+    def synthesize_pcm(self, text: str) -> Iterable[bytes]:
+        command = [
+            "piper",
+            "--model",
+            str(PIPER_MODEL),
+            "--config",
+            str(PIPER_CONFIG),
+            "--output_raw",
+            "--speaker",
+            str(PIPER_SPEAKER),
+            "--length_scale",
+            str(PIPER_LENGTH_SCALE),
+            "--noise_scale",
+            str(PIPER_NOISE_SCALE),
+            "--noise_w",
+            str(PIPER_NOISE_W_SCALE),
+            "--espeak_data",
+            str(PIPER_ESPEAK_DATA),
+            "--quiet",
+        ]
+        with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as process:
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write((text.strip() + "\n").encode("utf-8"))
+            process.stdin.close()
+            while True:
+                chunk = process.stdout.read(4096)
+                if not chunk:
+                    break
+                yield chunk
+            return_code = process.wait(timeout=TTS_PLAYER_TIMEOUT_SECONDS)
+        if return_code != 0:
+            raise RuntimeError(f"piper exited with status {return_code}")
+
+
 class CachedTextToSpeech:
     def __init__(self, voice: TextToSpeech, max_items: int, max_bytes: int) -> None:
         self.voice = voice
@@ -601,6 +647,17 @@ class CachedTextToSpeech:
         if text and text not in self.cache:
             for _ in self.synthesize_pcm(text):
                 pass
+
+
+def create_piper_tts() -> TextToSpeech:
+    require_file(PIPER_MODEL)
+    require_file(PIPER_CONFIG)
+    with PIPER_CONFIG.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file) or {}
+    audio = config.get("audio") if isinstance(config, dict) else None
+    sample_rate = int((audio or {}).get("sample_rate") or 22050)
+    log(f"Piper TTS config: model={PIPER_MODEL} sample_rate={sample_rate} speaker={PIPER_SPEAKER}")
+    return PiperTTS(sample_rate)
 
 
 def create_cosyvoice_tts() -> TextToSpeech:
@@ -967,6 +1024,8 @@ def install_torchaudio_stub() -> None:
 
 
 def create_tts() -> tuple[TextToSpeech, None]:
+    if VOICE_TTS_ENGINE == "piper":
+        return wrap_tts(create_piper_tts()), None
     if VOICE_TTS_ENGINE == "cosyvoice":
         return wrap_tts(create_cosyvoice_tts()), None
     raise RuntimeError(f"VOICE_TTS_ENGINE '{VOICE_TTS_ENGINE}' is not supported")

@@ -158,7 +158,7 @@ OLLAMA_MODEL=qwen3:4b-instruct
 - 声源方向：`chat2m-speech` 通过 ReSpeaker 官方 USB 控制接口读取 DOA/VAD；统一接口为 `GET http://chat2m-gateway:8080/direction`，内部直连为 `GET http://chat2m-speech:8090/direction`，问“我在你的哪边”会直接读取该接口数据回答。
 - 连续对话：唤醒后先播放“有什么可以帮助您的”，之后最多连续 8 轮，不需要每轮重复唤醒。
 - 退出会话：说“退下吧”“你走吧”“走吧”“不用了”“再见”等会回到待机。
-- TTS 输出：默认使用 CosyVoice GPU 流式 TTS，合成 PCM 后直接通过 ALSA 播放。
+- TTS 输出：默认使用 CosyVoice GPU 流式 TTS，也保留 Piper CPU 轻量可选链路，合成 PCM 后直接通过 ALSA 播放。
 - 状态屏：Waveshare ESP32-S3-Touch-LCD-3.5 通过 USB 串口接收 `idle` / `listening` / `thinking` / `speaking` / `error` 状态。
 
 ## 语音唤醒
@@ -195,17 +195,27 @@ VOICE_TTS_DEVICE=cuda
 COSYVOICE_FP16=1
 ```
 
+轻量 CPU 链路仍然可以按配置切换，不需要重建镜像：
+
+```env
+VOICE_ASR_ENGINE=sherpa
+VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+VOICE_TTS_ENGINE=piper
+VOICE_TTS_MODEL=zh_CN-huayan-medium
+```
+
 目前内置可选项：
 
 ```env
 VOICE_ASR_ENGINE=sherpa      # VOICE_ASR_MODEL=sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 VOICE_ASR_ENGINE=sensevoice # VOICE_ASR_MODEL=SenseVoiceSmall
+VOICE_TTS_ENGINE=piper      # VOICE_TTS_MODEL=zh_CN-huayan-medium
 VOICE_TTS_ENGINE=cosyvoice  # VOICE_TTS_MODEL=CosyVoice-300M-SFT / CosyVoice-300M-Instruct
 VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
-VOICE_TTS_DEVICE=cuda       # CosyVoice 只允许 auto / cuda
+VOICE_TTS_DEVICE=cuda       # CosyVoice 只允许 auto / cuda；Piper 使用 CPU
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。CosyVoice、Piper 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT、Piper CLI 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
 
 状态屏串口默认不写宿主机 udev 规则。`chat2m-status` 容器会挂载宿主机 `/dev` 到 `/host-dev`，再按 `data/config/runtime.env` 里的候选规则自动发现同型号 ESP32-S3 USB Serial/JTAG 设备：
 

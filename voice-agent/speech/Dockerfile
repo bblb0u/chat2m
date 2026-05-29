@@ -86,6 +86,16 @@ RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps "$JETSON_T
       "tiktoken==0.7.0" \
       "transformers==4.45.2"
 
+ARG PIPER_RELEASE=2023.11.14-2
+ARG PIPER_ARCHIVE=piper_linux_aarch64.tar.gz
+RUN curl -fsSL --retry 5 --connect-timeout 20 \
+      "https://github.com/rhasspy/piper/releases/download/${PIPER_RELEASE}/${PIPER_ARCHIVE}" \
+      -o /tmp/piper.tar.gz \
+    && tar -xzf /tmp/piper.tar.gz -C /opt \
+    && rm -f /tmp/piper.tar.gz \
+    && ln -sf /opt/piper/piper /usr/local/bin/piper \
+    && /usr/local/bin/piper --help >/dev/null
+
 RUN python3 - <<'PY'
 from pathlib import Path
 
@@ -126,7 +136,8 @@ COPY voice-agent/speech/app ./app
 
 ENV COSYVOICE_CODE_DIR=/opt/CosyVoice \
     COSYVOICE_PACKAGE_PATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS \
-    LD_LIBRARY_PATH=/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
+    PIPER_ESPEAK_DATA=/opt/piper/espeak-ng-data \
+    LD_LIBRARY_PATH=/opt/piper:/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra \
     PATH=/usr/src/tensorrt/bin:$PATH
 
 ENTRYPOINT ["/entrypoint.sh"]

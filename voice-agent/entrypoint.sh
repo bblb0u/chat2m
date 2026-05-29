@@ -96,6 +96,18 @@ resolve_asr_model() {
 resolve_tts_model() {
   VOICE_TTS_ENGINE="$(normalize_key "${VOICE_TTS_ENGINE:-cosyvoice}")"
   case "$VOICE_TTS_ENGINE" in
+    piper)
+      VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-zh_CN-huayan-medium}"
+      case "$VOICE_TTS_MODEL" in
+        zh_CN-huayan-medium)
+          PIPER_MODEL_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx"
+          PIPER_CONFIG_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
+          ;;
+        *)
+          known_value_error "VOICE_TTS_MODEL" "$VOICE_TTS_MODEL" "zh_CN-huayan-medium"
+          ;;
+      esac
+      ;;
     cosyvoice)
       VOICE_TTS_MODEL="${VOICE_TTS_MODEL:-CosyVoice-300M-SFT}"
       case "$VOICE_TTS_MODEL" in
@@ -115,7 +127,7 @@ resolve_tts_model() {
       esac
       ;;
     *)
-      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "cosyvoice"
+      known_value_error "VOICE_TTS_ENGINE" "$VOICE_TTS_ENGINE" "piper, cosyvoice"
       ;;
   esac
 }
@@ -274,6 +286,26 @@ asr_model_ok() {
     "$ASR_MODEL/decoder-epoch-99-avg-1$asr_suffix" \
     "$ASR_MODEL/joiner-epoch-99-avg-1$asr_suffix" \
     && asr_runtime_ok
+}
+
+piper_runtime_ok() {
+  printf '你好\n' | piper \
+    --model "$PIPER_DIR/model.onnx" \
+    --config "$PIPER_DIR/model.onnx.json" \
+    --output_raw \
+    --speaker "${PIPER_SPEAKER:-0}" \
+    --length_scale "${PIPER_LENGTH_SCALE:-1.0}" \
+    --noise_scale "${PIPER_NOISE_SCALE:-0.667}" \
+    --noise_w "${PIPER_NOISE_W_SCALE:-0.8}" \
+    --espeak_data "${PIPER_ESPEAK_DATA:-/opt/piper/espeak-ng-data}" \
+    --quiet >/dev/null
+}
+
+piper_model_ok() {
+  required_files_ok \
+    "$PIPER_DIR/model.onnx" \
+    "$PIPER_DIR/model.onnx.json" \
+    && piper_runtime_ok
 }
 
 dir_has_files() {
@@ -659,6 +691,12 @@ ensure_sherpa_asr_runtime() {
   ensure_kws_runtime
 }
 
+ensure_piper_runtime() {
+  require_command piper
+  [ -d "${PIPER_ESPEAK_DATA:-/opt/piper/espeak-ng-data}" ] \
+    || missing_image_dependency "Piper espeak-ng data directory '${PIPER_ESPEAK_DATA:-/opt/piper/espeak-ng-data}'"
+}
+
 sensevoice_runtime_ok() {
   python_module_ok sense_voice_streaming_asr \
     && python_module_ok onnxruntime \
@@ -719,6 +757,7 @@ ensure_selected_runtimes() {
       sensevoice) ensure_sensevoice_runtime ;;
     esac
     case "$VOICE_TTS_ENGINE" in
+      piper) ensure_piper_runtime ;;
       cosyvoice) ensure_cosyvoice_runtime ;;
     esac
   fi
@@ -773,7 +812,7 @@ download_with_progress() {
   fi
   print_download_progress "$label" "$completed" "$total"
 
-  curl -fL --retry 10 --retry-all-errors --connect-timeout 20 --speed-limit 1024 --speed-time 120 --continue-at - --silent --show-error "$url" -o "$tmp" &
+  curl -fL --retry 10 --retry-connrefused --connect-timeout 20 --speed-limit 1024 --speed-time 120 --continue-at - --silent --show-error "$url" -o "$tmp" &
   curl_pid="$!"
 
   (
@@ -924,6 +963,24 @@ ensure_hf_snapshot_model() {
   fi
 }
 
+ensure_piper_model() {
+  if piper_model_ok; then
+    echo "piper $VOICE_TTS_MODEL is ready"
+    return
+  fi
+
+  echo "piper $VOICE_TTS_MODEL is missing or invalid; re-downloading"
+  rm -rf "$PIPER_DIR"
+  download_with_progress "$PIPER_DIR/model.onnx" "$PIPER_MODEL_URL" "$VOICE_TTS_MODEL.onnx"
+  download_with_progress "$PIPER_DIR/model.onnx.json" "$PIPER_CONFIG_URL" "$VOICE_TTS_MODEL.onnx.json"
+
+  echo "[models] validating piper $VOICE_TTS_MODEL"
+  if ! piper_model_ok; then
+    echo "piper $VOICE_TTS_MODEL is still invalid after download" >&2
+    exit 1
+  fi
+}
+
 init_config
 load_runtime_env
 
@@ -937,6 +994,7 @@ resolve_tts_model
 KWS_MODEL="$MODELS_DIR/$KWS_MODEL_NAME"
 ASR_MODEL="$MODELS_DIR/$VOICE_ASR_ENGINE/$VOICE_ASR_MODEL"
 VAD_MODEL_DIR="$MODELS_DIR/$VOICE_ASR_ENGINE/speech_fsmn_vad_zh-cn-16k-common-onnx"
+PIPER_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
 TTS_MODEL_DIR="$MODELS_DIR/$VOICE_TTS_ENGINE/$VOICE_TTS_MODEL"
 export VOICE_ASR_ENGINE
 export VOICE_ASR_MODEL
@@ -952,6 +1010,7 @@ if model_selected speech; then
     sensevoice) MODEL_SET="$MODEL_SET,sensevoice" ;;
   esac
   case "$VOICE_TTS_ENGINE" in
+    piper) MODEL_SET="$MODEL_SET,piper" ;;
     cosyvoice) MODEL_SET="$MODEL_SET,cosyvoice" ;;
   esac
 fi
@@ -997,6 +1056,10 @@ if model_selected asr; then
     "$ASR_MODEL_URL" \
     asr_model_ok \
     "$ASR_MODEL"
+fi
+
+if model_selected piper; then
+  ensure_piper_model
 fi
 
 if model_selected sensevoice; then
