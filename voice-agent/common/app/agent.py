@@ -559,7 +559,12 @@ def load_sensevoice_streaming_module() -> Any:
     package_dir = Path(sense_voice_streaming_asr.__file__).parent
     source_path = package_dir / "sense_voice_streaming_asr.py"
     source = source_path.read_text(encoding="utf-8")
-    patched_source = "from __future__ import annotations\nimport logging\n" + source
+    source_lines = [
+        line
+        for line in source.splitlines()
+        if not line.strip().startswith("from __future__ import ")
+    ]
+    patched_source = "from __future__ import annotations\nimport logging\n" + "\n".join(source_lines) + "\n"
     module = type(sys)(module_name)
     module.__file__ = str(source_path)
     module.__package__ = "sense_voice_streaming_asr"
