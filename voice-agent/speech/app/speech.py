@@ -22,6 +22,7 @@ from app.agent import (
     GATEWAY_URL,
     INPUT_CHANNELS,
     INPUT_DEVICE,
+    INPUT_DEVICE_REQUIRED,
     KWS_MODEL_DIR,
     MAX_SESSION_TURNS,
     POST_RESPONSE_DRAIN_SECONDS,
@@ -196,8 +197,23 @@ def listen_for_wake(kws, input_device: int | str | None, chunk: int, display: St
     return matched
 
 
+def wait_for_input_device(display: StatusClient) -> int | str | None:
+    last_log = 0.0
+    while True:
+        input_device = select_input_device(INPUT_DEVICE)
+        if input_device is not None or not INPUT_DEVICE_REQUIRED:
+            return input_device
+
+        now = time.monotonic()
+        if now - last_log >= SPEECH_WAIT_LOG_SECONDS:
+            log(f"waiting for configured input device: {INPUT_DEVICE}")
+            last_log = now
+        display.set_state("error", "audio input unavailable")
+        time.sleep(SPEECH_WAIT_POLL_SECONDS)
+
+
 def run_embedded_wake_loop(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
-    input_device = select_input_device(INPUT_DEVICE)
+    input_device = wait_for_input_device(display)
     log(f"input device: {input_device if input_device is not None else 'default'}")
     log(f"loading wake-word model: {KWS_MODEL_DIR}")
     kws = create_kws()
@@ -243,7 +259,7 @@ def open_session_input(input_device: int | str | None, chunk: int) -> sd.InputSt
 
 
 def run_session(recognizer, voice, tts_config, display: StatusClient, beep_path: Path, audio_source) -> None:
-    input_device = select_input_device(INPUT_DEVICE)
+    input_device = wait_for_input_device(display)
     chunk = int(CHUNK_SECONDS * SAMPLE_RATE)
     audio = open_session_input(input_device, chunk)
     try:

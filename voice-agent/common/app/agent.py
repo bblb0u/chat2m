@@ -55,6 +55,7 @@ NETWORK_UNAVAILABLE_RESPONSE = env_value("NETWORK_UNAVAILABLE_RESPONSE")
 LLM_ROUTE_CACHE_INTERVAL_SECONDS = env_float("LLM_ROUTE_CACHE_INTERVAL_SECONDS")
 DISPLAY_SERIAL_BAUD = env_int("DISPLAY_SERIAL_BAUD")
 INPUT_DEVICE = env_value("AUDIO_INPUT_DEVICE", allow_empty=True)
+INPUT_DEVICE_REQUIRED = bool(INPUT_DEVICE and not INPUT_DEVICE.isdigit())
 OUTPUT_DEVICE = env_value("AUDIO_OUTPUT_DEVICE", allow_empty=True)
 SAMPLE_RATE = env_int("AUDIO_SAMPLE_RATE")
 CHUNK_SECONDS = env_float("AUDIO_CHUNK_SECONDS")
@@ -266,11 +267,6 @@ def select_input_device(selector: str) -> int | str | None:
             return index
         matched_without_input = True
 
-    if matched_without_input:
-        log(f"input device containing '{selector}' has no input channels; using PortAudio default")
-        return None
-
-    log(f"input device containing '{selector}' not found; using PortAudio default")
     return None
 
 
