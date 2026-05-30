@@ -35,14 +35,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: ollama
-            dockerfile: ollama/Dockerfile
-          - image: chat2m-gateway
-            dockerfile: voice-gateway/Dockerfile
-          - image: chat2m-speech
-            dockerfile: voice-agent/speech/Dockerfile
-          - image: chat2m-status
-            dockerfile: voice-agent/status/Dockerfile
+          - image: chat2me-llm
+            dockerfile: chat2me-llm/Dockerfile
+          - image: chat2me-core
+            dockerfile: chat2me-core/Dockerfile
+          - image: chat2me-speech
+            dockerfile: chat2me-speech/Dockerfile
+          - image: chat2me-asr
+            dockerfile: chat2me-asr/Dockerfile
+          - image: chat2me-tts
+            dockerfile: chat2me-tts/Dockerfile
+          - image: chat2me-status
+            dockerfile: chat2me-status/Dockerfile
 
     steps:
       - name: Checkout

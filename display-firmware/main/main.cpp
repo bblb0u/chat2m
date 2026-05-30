@@ -23,7 +23,7 @@
 #define DISPLAY_LINE_SIZE 512
 #define THINKING_TIMEOUT_MS 15000
 
-static const char *TAG = "chat2m_display";
+static const char *TAG = "chat2me_display";
 
 static esp_io_expander_handle_t expander_handle = NULL;
 static esp_lcd_panel_io_handle_t io_handle = NULL;

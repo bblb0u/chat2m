@@ -1,9 +1,9 @@
-name: chat2m
+name: chat2me
 
 services:
-  ollama:
-    image: bblb0u/ollama:latest
-    container_name: ollama
+  chat2me-llm:
+    image: bblb0u/chat2me-llm:latest
+    container_name: chat2me-llm
     restart: unless-stopped
     runtime: nvidia
     environment:
@@ -12,24 +12,25 @@ services:
       OLLAMA_LLM_LIBRARY: cuda_jetpack5
       JETSON_JETPACK: "5"
       LD_LIBRARY_PATH: /usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+      OLLAMA_BASE_URL: http://127.0.0.1:11434
     volumes:
       - ./data/config:/app/config
       - ./data/ollama:/root/.ollama
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 30s
 
-  chat2m-gateway:
-    image: bblb0u/chat2m-gateway:latest
-    container_name: chat2m-gateway
+  chat2me-core:
+    image: bblb0u/chat2me-core:latest
+    container_name: chat2me-core
     restart: unless-stopped
     volumes:
       - ./data/config:/app/config
     depends_on:
-      ollama:
+      chat2me-llm:
         condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()"]
@@ -38,9 +39,9 @@ services:
       retries: 5
       start_period: 20s
 
-  chat2m-status:
-    image: bblb0u/chat2m-status:latest
-    container_name: chat2m-status
+  chat2me-status:
+    image: bblb0u/chat2me-status:latest
+    container_name: chat2me-status
     restart: unless-stopped
     command: ["python3", "-m", "app.status"]
     device_cgroup_rules:
@@ -50,7 +51,7 @@ services:
       - ./data/config:/app/config
     environment:
       VOICE_MODELS_REQUIRED: "0"
-      VOICE_ROLE: chat2m-status
+      VOICE_ROLE: chat2me-status
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
       interval: 30s
@@ -58,26 +59,68 @@ services:
       retries: 5
       start_period: 10s
 
-  chat2m-speech:
-    image: bblb0u/chat2m-speech:latest
-    container_name: chat2m-speech
+  chat2me-asr:
+    image: bblb0u/chat2me-asr:latest
+    container_name: chat2me-asr
     restart: unless-stopped
     runtime: nvidia
-    devices:
-      - /dev/snd:/dev/snd
-      - /dev/bus/usb:/dev/bus/usb
-    command: ["python3", "-m", "app.speech"]
+    command: ["python3", "-m", "app.asr"]
     environment:
-      VOICE_ROLE: chat2m-speech
+      VOICE_ROLE: chat2me-asr
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      LD_LIBRARY_PATH: /usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra
+    volumes:
+      - ./data/models:/models
+      - ./data/config:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8092/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  chat2me-tts:
+    image: bblb0u/chat2me-tts:latest
+    container_name: chat2me-tts
+    restart: unless-stopped
+    runtime: nvidia
+    command: ["python3", "-m", "app.tts"]
+    environment:
+      VOICE_ROLE: chat2me-tts
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       LD_LIBRARY_PATH: /opt/piper:/usr/local/cuda-11.4/targets/aarch64-linux/lib:/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra
     volumes:
       - ./data/models:/models
       - ./data/config:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8093/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  chat2me-speech:
+    image: bblb0u/chat2me-speech:latest
+    container_name: chat2me-speech
+    restart: unless-stopped
+    devices:
+      - /dev/snd:/dev/snd
+      - /dev/bus/usb:/dev/bus/usb
+    command: ["python3", "-m", "app.speech"]
+    environment:
+      VOICE_ROLE: chat2me-speech
+    volumes:
+      - ./data/models:/models
+      - ./data/config:/app/config
       - /etc/asound.conf:/etc/asound.conf:ro
     depends_on:
-      chat2m-gateway:
+      chat2me-core:
+        condition: service_healthy
+      chat2me-asr:
+        condition: service_healthy
+      chat2me-tts:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]

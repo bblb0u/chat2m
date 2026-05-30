@@ -34,7 +34,7 @@
 #include "XPowersAXP2101.tpp"
 typedef XPowersAXP2101 XPowersPMU;
 #else
-#error "Chat2M display firmware only vendors the AXP2101 subset of XPowersLib"
+#error "Chat2Me display firmware only vendors the AXP2101 subset of XPowersLib"
 #endif
 
 #include "XPowersLib_Version.h"

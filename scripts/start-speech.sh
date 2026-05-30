@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/start-local.sh
+Usage: ./scripts/start-speech.sh
 
 Options:
   -h, --help          Show this help.
@@ -28,8 +28,10 @@ done
 
 cd "$ROOT_DIR"
 
-docker compose up -d chat2me-llm chat2me-core
+docker compose up -d
 
-echo "Chat2Me local chat is running."
-echo "Core is available inside the compose network at http://chat2me-core:8080"
-echo "Model:  configured in data/config/runtime.env"
+echo "Chat2Me voice services are running."
+echo "Wake words: configured in data/config/runtime.env"
+echo "Model: configured in data/config/runtime.env"
+echo "Display serial: configured in data/config/runtime.env"
+echo "Logs: docker compose logs -f chat2me-speech chat2me-asr chat2me-tts chat2me-status"
