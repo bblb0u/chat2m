@@ -245,7 +245,19 @@ VOICE_ASR_DEVICE=auto       # auto / cpu / cuda
 VOICE_TTS_DEVICE=cpu        # Piper/MeloTTS/Sherpa 使用 CPU；F5-TTS 可用 auto/cpu/cuda；CosyVoice 需要 cuda/auto
 ```
 
-下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。Piper、MeloTTS、Sherpa TTS、F5-TTS、CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。镜像构建时公共 apt/pip 依赖和各模型专属依赖分在 `voice-agent/deps/` 脚本里，方便后续裁剪构建特定模型组合。
+下载地址和关键文件校验由镜像内置维护，不需要写在 env 里。Piper、MeloTTS、Sherpa TTS、F5-TTS、CosyVoice 和 SenseVoice/FSMN VAD 模型都会按需下载到 `data/models/`；Python、apt、CUDA、TensorRT 等运行时依赖必须随镜像发布，缺依赖会直接启动失败。
+
+镜像构建依赖按用途拆在 `voice-agent/deps/`：
+
+- `base/`：公共 apt 基础依赖。
+- `platform/`：Jetson CUDA/TensorRT/Torch 运行时。
+- `asr/`：SenseVoice、Sherpa ASR 依赖。
+- `tts/`：Piper、MeloTTS、F5-TTS、CosyVoice 依赖。
+- `online/`：在线 ASR/TTS 所需的轻量依赖检查。
+
+弱网构建可以通过 build arg 调整重试，例如 `CHAT2M_DOWNLOAD_RETRIES`、`CHAT2M_GIT_RETRIES`、`CHAT2M_PIP_RETRIES`、`CHAT2M_PIP_TIMEOUT`。模型文件运行时下载也支持断点续传和 `MODEL_DOWNLOAD_RETRIES`。
+
+代码目录里 `voice-agent/common/app` 只放跨 speech/status 共享的运行时工具；ASR/TTS、wake、ReSpeaker、F5-TTS/CosyVoice 适配都属于 speech 容器代码，放在 `voice-agent/speech/app`。
 
 `COSYVOICE_LOAD_TRT` 默认关闭。TensorRT `plan` 文件和当前 Jetson/TensorRT/plugin 环境强绑定；如果显式开启 TRT，必须在当前镜像运行环境里生成对应 plan，否则会直接报错，不会静默降级。
 

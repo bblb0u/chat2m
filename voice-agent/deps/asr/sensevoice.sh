@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-python3 -m pip install --no-cache-dir \
-  --retries 10 \
-  --timeout 60 \
+. /opt/chat2m-deps/lib.sh
+
+pip_install \
   "kaldi_native_fbank" \
   "onnx==1.16.1" \
   "onnxruntime==1.16.3" \

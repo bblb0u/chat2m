@@ -3,14 +3,12 @@ set -eu
 
 . /opt/chat2m-deps/lib.sh
 
-/opt/chat2m-deps/install-jetson-gpu.sh
-/opt/chat2m-deps/install-jetson-torch.sh
+/opt/chat2m-deps/platform/jetson-gpu.sh
+/opt/chat2m-deps/platform/jetson-torch.sh
 
 COSYVOICE_GIT_REF="${COSYVOICE_GIT_REF:-v2.0}"
 
-python3 -m pip install --no-cache-dir \
-  --retries 10 \
-  --timeout 60 \
+pip_install \
   "conformer==0.3.2" \
   "diffusers==0.29.0" \
   "einops==0.8.0" \
@@ -30,10 +28,10 @@ python3 -m pip install --no-cache-dir \
   "transformers==4.45.2"
 
 rm -rf /opt/CosyVoice
-git_clone_retry /opt/CosyVoice 5 --depth 1 --branch "$COSYVOICE_GIT_REF" https://github.com/FunAudioLLM/CosyVoice.git
-git_clone_retry /opt/CosyVoice/third_party/Matcha-TTS 5 --depth 1 https://github.com/shivammehta25/Matcha-TTS.git
+git_clone_retry /opt/CosyVoice "$GIT_RETRIES" --depth 1 --branch "$COSYVOICE_GIT_REF" https://github.com/FunAudioLLM/CosyVoice.git
+git_clone_retry /opt/CosyVoice/third_party/Matcha-TTS "$GIT_RETRIES" --depth 1 https://github.com/shivammehta25/Matcha-TTS.git
 
-retry_cmd 5 python3 -m pip download --retries 10 --timeout 60 --no-deps "openai-whisper==20231117" -d /tmp/chat2m-whisper
+pip_download --no-deps "openai-whisper==20231117" -d /tmp/chat2m-whisper
 mkdir -p /opt/chat2m-whisper-assets
 tar -xzf /tmp/chat2m-whisper/openai-whisper-20231117.tar.gz -C /tmp/chat2m-whisper \
   openai-whisper-20231117/whisper/assets/gpt2.tiktoken \

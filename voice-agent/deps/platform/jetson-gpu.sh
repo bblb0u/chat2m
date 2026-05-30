@@ -13,15 +13,13 @@ JETSON_L4T_PLATFORM="${JETSON_L4T_PLATFORM:-t234}"
 download_file \
   "https://repo.download.nvidia.com/jetson/jetson-ota-public.asc" \
   /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
-  "Jetson apt key" \
-  10
+  "Jetson apt key"
 printf '%s\n' \
   'deb https://repo.download.nvidia.com/jetson/common r35.6 main' \
   "deb https://repo.download.nvidia.com/jetson/${JETSON_L4T_PLATFORM} r35.6 main" \
   > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list
 
-apt-get update
-apt-get install -y --no-install-recommends \
+apt_install_packages \
   cuda-cudart-11-4 \
   cuda-cupti-11-4 \
   cuda-nvrtc-11-4 \

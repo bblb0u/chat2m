@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-/opt/chat2m-deps/install-jetson-gpu.sh
-/opt/chat2m-deps/install-jetson-torch.sh
+. /opt/chat2m-deps/lib.sh
 
-python3 -m pip install --no-cache-dir \
-  --retries 10 \
-  --timeout 60 \
+/opt/chat2m-deps/platform/jetson-gpu.sh
+/opt/chat2m-deps/platform/jetson-torch.sh
+
+pip_install \
   "einops==0.8.0" \
   "importlib_resources" \
   "librosa==0.10.2" \
@@ -17,6 +17,6 @@ python3 -m pip install --no-cache-dir \
   "soundfile" \
   "torchdiffeq==0.2.5" \
   "x-transformers==1.31.14"
-python3 -m pip install --no-cache-dir --retries 10 --timeout 60 --no-deps \
+pip_install --no-deps \
   "vocos==0.1.0" \
   "f5-tts==1.1.20"

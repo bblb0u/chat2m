@@ -1,10 +1,11 @@
 #!/bin/sh
 set -eu
 
+. /opt/chat2m-deps/lib.sh
+
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update
-apt-get install -y --no-install-recommends \
+apt_install_packages \
   alsa-utils \
   ca-certificates \
   curl \
