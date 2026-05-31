@@ -2,7 +2,8 @@ FROM ollama/ollama:latest AS upstream
 
 FROM ubuntu:24.04
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
@@ -15,12 +16,12 @@ RUN apt-get update \
 COPY --from=upstream /usr/bin/ollama /usr/bin/ollama
 COPY --from=upstream /usr/lib/ollama /usr/lib/ollama
 
-COPY chat2me-llm/requirements.txt .
+COPY services/llm/requirements.txt .
 RUN pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
-COPY config /defaults/config
-COPY chat2me-llm/entrypoint.sh /entrypoint.sh
-COPY chat2me-llm/app ./app
+COPY infra/default-config /defaults/config
+COPY services/llm/entrypoint.sh /entrypoint.sh
+COPY services/llm/app ./app
 RUN chmod +x /entrypoint.sh
 
 ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/lib/ollama/cuda_jetpack5:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \

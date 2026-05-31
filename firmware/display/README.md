@@ -20,7 +20,7 @@ Supported states:
 
 ```bash
 . /opt/esp-idf-v5.5.4/export.sh
-cd display-firmware
+cd firmware/display
 idf.py build
 idf.py -p /dev/ttyACM0 flash
 ```

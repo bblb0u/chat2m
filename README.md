@@ -1,15 +1,21 @@
 # Chat2Me 本地语音对话
 
-Chat2Me 现在按六个镜像拆分：
+Chat2Me 现在发布三个镜像：
 
 - `chat2me-core`：业务编排、固定问答、角色配置、安全过滤、`/chat` API。
-- `chat2me-speech`：唤醒词、麦克风、ReSpeaker 方向、连续会话、音频播放。
-- `chat2me-asr`：ASR 服务，支持 SenseVoice、Sherpa 和在线 ASR，并支持在线不可用时回落到本地 ASR。
-- `chat2me-tts`：TTS 服务，支持 Piper、MeloTTS、Sherpa TTS、F5-TTS、CosyVoice 和在线 TTS，并支持在线不可用时回落到本地 TTS。
 - `chat2me-llm`：LLM 服务，合并本地 Ollama，支持 OpenAI-compatible 在线 LLM，并支持在线不可用时回落到本地 Ollama。
-- `chat2me-status`：状态屏转发器，把 `idle/listening/thinking/speaking/error` 等状态发给 ESP32 显示屏。
+- `chat2me-voice`：语音与状态通用镜像，在 Compose 中分别启动为 `chat2me-speech`、`chat2me-asr`、`chat2me-tts`、`chat2me-status` 四个服务。
 
-运行时配置从 `config/` 初始化到 `data/config/`。实际运行请修改 `data/config/runtime.env`。
+运行时配置从 `infra/default-config/` 初始化到 `data/config/`。实际运行请修改 `data/config/runtime.env`。
+
+源码目录按职责分区：
+
+- `services/`：可构建镜像和服务代码。
+- `packages/`：服务间共享代码与运行入口。
+- `infra/`：默认配置、镜像依赖安装脚本、CI/CD 配置所需资源。
+- `firmware/`：ESP32 显示屏固件。
+- `scripts/`：本地启动、停止和模型准备脚本。
+- `data/`：运行时配置、模型和 Ollama 数据，不参与镜像构建。
 
 ## 快速启动
 

@@ -15,6 +15,7 @@ concurrency:
 
 env:
   REGISTRY: docker.io
+  IMAGE_NAMESPACE: bblb0u
 
 jobs:
   validate-secrets:
@@ -36,17 +37,11 @@ jobs:
       matrix:
         include:
           - image: chat2me-llm
-            dockerfile: chat2me-llm/Dockerfile
+            dockerfile: services/llm/Dockerfile
           - image: chat2me-core
-            dockerfile: chat2me-core/Dockerfile
-          - image: chat2me-speech
-            dockerfile: chat2me-speech/Dockerfile
-          - image: chat2me-asr
-            dockerfile: chat2me-asr/Dockerfile
-          - image: chat2me-tts
-            dockerfile: chat2me-tts/Dockerfile
-          - image: chat2me-status
-            dockerfile: chat2me-status/Dockerfile
+            dockerfile: services/core/Dockerfile
+          - image: chat2me-voice
+            dockerfile: services/voice/Dockerfile
 
     steps:
       - name: Checkout
@@ -67,11 +62,10 @@ jobs:
       - name: Set image tags
         id: image-tags
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_NAME: ${{ matrix.image }}
         run: |
           date_tag="$(TZ=Asia/Shanghai date +%Y%m%d)"
-          image="${REGISTRY}/${DOCKERHUB_USERNAME}/${IMAGE_NAME}"
+          image="${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}"
           {
             echo "tags<<EOF"
             echo "${image}:latest"

@@ -6,12 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY chat2me-core/requirements.txt .
+COPY services/core/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config /defaults/config
-COPY chat2me-core/entrypoint.sh /entrypoint.sh
-COPY chat2me-core/app ./app
+COPY infra/default-config /defaults/config
+COPY services/core/entrypoint.sh /entrypoint.sh
+COPY services/core/app ./app
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -11,6 +11,6 @@ ollama-data
 models
 tools
 vendor
-display-firmware/build
-display-firmware/managed_components
-display-firmware/sdkconfig
+firmware/display/build
+firmware/display/managed_components
+firmware/display/sdkconfig
